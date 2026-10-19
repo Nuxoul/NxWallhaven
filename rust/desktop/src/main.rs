@@ -11,6 +11,7 @@ mod config;
 #[cfg(test)]
 mod default_collection_regression;
 mod detail_loading;
+mod gallery_layout;
 mod image_disk_cache;
 mod image_loader;
 #[cfg(test)]
@@ -22,6 +23,8 @@ mod profile_controller;
 #[cfg(test)]
 mod profile_regression;
 mod public_profile;
+#[cfg(test)]
+mod resize_regression;
 mod search;
 mod website;
 mod website_collections;
@@ -32,14 +35,13 @@ mod window_hub;
 mod zoom_regression;
 use config::Settings;
 use image_loader::{DecodedImage, ImageLoader};
-use slint::{ComponentHandle, Image, VecModel};
+use slint::{ComponentHandle, Image, Model, VecModel};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
-use wh_core::layout::{self, LayoutConfig};
 use wh_core::{SearchQuery, SearchResponse, WallhavenClient, Wallpaper};
 slint::include_modules!();
 const GAP: f32 = 8.0;
@@ -54,43 +56,7 @@ struct CardModel {
     h: f32,
 }
 fn relayout(cards: &mut [CardModel], width: f32, mode: i32) {
-    let width = width.max(200.0);
-    if mode == 1 {
-        let columns = ((width + GAP) / (260.0 + GAP)).floor().max(1.0) as usize;
-        let w = (width - GAP * (columns - 1) as f32) / columns as f32;
-        for (i, c) in cards.iter_mut().enumerate() {
-            c.x = (i % columns) as f32 * (w + GAP);
-            c.y = (i / columns) as f32 * (w / 1.6 + GAP);
-            c.w = w;
-            c.h = w / 1.6;
-        }
-    } else {
-        let ratios = cards
-            .iter()
-            .map(|c| {
-                if c.aspect.is_finite() && c.aspect > 0.0 {
-                    c.aspect as f64
-                } else {
-                    16.0 / 9.0
-                }
-            })
-            .collect::<Vec<_>>();
-        let layout = layout::compute(
-            &ratios,
-            &LayoutConfig {
-                container_width: width as f64,
-                target_row_height: 210.0,
-                gap: GAP as f64,
-                min_item_height: 1.0,
-            },
-        );
-        for (c, item) in cards.iter_mut().zip(layout.items()) {
-            c.x = item.rect.x as f32;
-            c.y = item.rect.y as f32;
-            c.w = item.rect.w as f32;
-            c.h = item.rect.h as f32;
-        }
-    }
+    gallery_layout::arrange(cards, width, mode, gallery_layout::MAIN_CANVAS_WIDTH, 210.0);
 }
 struct ImageStore {
     map: HashMap<String, Image>,
@@ -395,20 +361,49 @@ fn update_status(ui: &AppWindow, st: &State) {
         .into(),
     );
 }
+/// Read the actual viewport once per pump, never mutate models inside a layout callback.
+fn sync_gallery_geometry(ui: &AppWindow, st: &mut State) -> bool {
+    let width = ui.get_browse_width();
+    let offset = ui.get_scroll_offset().max(0.0);
+    if width >= 200.0 && (width - st.width).abs() > 0.5 {
+        let scale = width / st.width.max(1.0);
+        st.width = width;
+        relayout(&mut st.cards, width, ui.get_layout_mode());
+        ui.set_content_height(st.height());
+        let maximum = (st.height() + 16.0 - ui.get_viewport_height()).max(0.0);
+        st.offset = (st.offset * scale).clamp(0.0, maximum);
+        ui.set_browse_position(-st.offset);
+        true
+    } else if (offset - st.offset).abs() > 0.5 {
+        st.offset = offset;
+        true
+    } else {
+        false
+    }
+}
 /// A small overscan window. No Image or UI object crosses a worker thread.
 fn render(ui: &AppWindow, st: &mut State, loader: &ImageLoader, tx: &mpsc::Sender<Event>) {
     let top = st.offset.max(0.0);
     let viewport = ui.get_viewport_height().max(600.0);
     let low = (top - viewport).max(0.0);
     let high = top + viewport * 3.0;
-    let model = VecModel::<Card>::default();
+    let mut model = Vec::<Card>::new();
+    let retained = ui
+        .get_cards()
+        .iter()
+        .filter(|card| card.loaded)
+        .map(|card| (card.id.to_string(), card.thumb))
+        .collect::<HashMap<_, _>>();
     let mut jobs = Vec::new();
     let generation = st.generation;
     for (i, c) in st.cards.iter().enumerate() {
         if c.y + c.h < low || c.y > high {
             continue;
         }
-        let image = st.images.get(&c.id);
+        let image = st
+            .images
+            .get(&c.id)
+            .or_else(|| retained.get(&c.id).cloned());
         let failed = st.failed.contains(&c.id);
         if image.is_none() && !failed && st.pending.insert(c.id.clone()) {
             if let Some(url) = st.walls[i].thumb_url() {
@@ -433,7 +428,11 @@ fn render(ui: &AppWindow, st: &mut State, loader: &ImageLoader, tx: &mpsc::Sende
             favorited: st.web.favorites.get(&c.id).copied().unwrap_or(false),
         });
     }
-    ui.set_cards(slint::ModelRc::new(model));
+    let current = ui.get_cards();
+    let updated = gallery_layout::sync_model(current.clone(), model, |card| card.id.as_str());
+    if current != updated {
+        ui.set_cards(updated);
+    }
     ui.set_content_height(st.height());
     if !jobs.is_empty() {
         let ids = st.walls.iter().map(|w| w.id.clone()).collect::<Vec<_>>();
@@ -744,34 +743,6 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let weak = ui.as_weak();
         let state = state.clone();
-        let loader = loader.clone();
-        let tx = tx.clone();
-        ui.on_scrolled(move |offset| {
-            let Some(ui) = weak.upgrade() else { return };
-            let Ok(mut st) = state.try_borrow_mut() else {
-                return;
-            };
-            st.offset = offset.max(0.0);
-            render(&ui, &mut st, &loader, &tx);
-            if ui.get_screen() == 0
-                && should_prefetch(
-                    st.page,
-                    st.last,
-                    st.busy,
-                    st.offset,
-                    ui.get_viewport_height().max(600.0),
-                    st.height(),
-                )
-            {
-                let page = st.page + 1;
-                request_page(&mut st, &tx, page);
-                update_status(&ui, &st);
-            }
-        });
-    }
-    {
-        let weak = ui.as_weak();
-        let state = state.clone();
         let tx = tx.clone();
         ui.on_load_more(move || {
             if let Some(ui) = weak.upgrade() {
@@ -782,25 +753,6 @@ fn main() -> Result<(), slint::PlatformError> {
                     update_status(&ui, &st);
                 }
             }
-        });
-    }
-    {
-        let weak = ui.as_weak();
-        let state = state.clone();
-        let loader = loader.clone();
-        let tx = tx.clone();
-        ui.on_resized(move |width| {
-            let Some(ui) = weak.upgrade() else { return };
-            let Ok(mut st) = state.try_borrow_mut() else {
-                return;
-            };
-            if width < 200.0 || (st.width - width).abs() < 2.0 {
-                return;
-            }
-            st.width = width;
-            let mode = ui.get_layout_mode();
-            relayout(&mut st.cards, width, mode);
-            render(&ui, &mut st, &loader, &tx);
         });
     }
     {
@@ -1129,12 +1081,16 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let loader = loader.clone();
         let tx = tx.clone();
+        let mut previous_viewport_height = 0.0;
         pump.start(
             slint::TimerMode::Repeated,
             Duration::from_millis(40),
             move || {
                 let Some(ui) = weak.upgrade() else { return };
-                let mut changed = false;
+                let viewport_height = ui.get_viewport_height();
+                let mut changed = sync_gallery_geometry(&ui, &mut state.borrow_mut())
+                    || (viewport_height - previous_viewport_height).abs() > 0.5;
+                previous_viewport_height = viewport_height;
                 for event in rx.try_iter().take(24) {
                     let mut st = state.borrow_mut();
                     match event {
@@ -1310,7 +1266,22 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
                 if changed {
-                    render(&ui, &mut state.borrow_mut(), &loader, &tx);
+                    let mut st = state.borrow_mut();
+                    render(&ui, &mut st, &loader, &tx);
+                    if ui.get_screen() == 0
+                        && should_prefetch(
+                            st.page,
+                            st.last,
+                            st.busy,
+                            st.offset,
+                            viewport_height,
+                            st.height(),
+                        )
+                    {
+                        let page = st.page + 1;
+                        request_page(&mut st, &tx, page);
+                        update_status(&ui, &st);
+                    }
                 }
             },
         );

@@ -214,35 +214,54 @@ enum ResultEvent {
 }
 fn render(window: &ProfileWindow, st: &mut ProfileState) -> Vec<(usize, String)> {
     let width = window.get_gallery_width().max(400.0);
+    let resized = st.width >= 200.0 && (st.width - width).abs() > 0.5;
+    let offset = if resized {
+        st.offset * width / st.width
+    } else {
+        window.get_gallery_offset().max(0.0)
+    };
     st.width = width;
-    let offset = window.get_gallery_offset().max(0.0);
     st.offset = offset;
     let height = window.get_gallery_visible_height().max(500.0);
-    let layout = wh_core::layout::compute(
-        &st.walls
-            .iter()
-            .map(Wallpaper::aspect_ratio)
-            .collect::<Vec<_>>(),
-        &wh_core::layout::LayoutConfig {
-            container_width: width as f64,
-            target_row_height: 180.0,
-            gap: 8.0,
-            min_item_height: 1.0,
-        },
+    let mut geometry = st
+        .walls
+        .iter()
+        .map(|wall| CardModel {
+            aspect: wall.aspect_ratio() as f32,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    gallery_layout::arrange(
+        &mut geometry,
+        width,
+        0,
+        gallery_layout::PROFILE_CANVAS_WIDTH,
+        180.0,
     );
+    let content_height = geometry
+        .iter()
+        .map(|card| card.y + card.h)
+        .fold(0.0, f32::max);
+    let retained = window
+        .get_cards()
+        .iter()
+        .filter(|card| card.loaded)
+        .map(|card| (card.id.to_string(), card.thumb))
+        .collect::<HashMap<_, _>>();
     let mut jobs = Vec::new();
-    let cards = layout
-        .items()
-        .into_iter()
-        .filter_map(|item| {
+    let cards = geometry
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
             // Slint only holds image references for the visible/overscan cards.
-            if item.rect.y + item.rect.h < (offset - height) as f64
-                || item.rect.y > (offset + 2.0 * height) as f64
-            {
+            if item.y + item.h < offset - height || item.y > offset + 2.0 * height {
                 return None;
             }
-            let wall = &st.walls[item.index];
-            let image = st.images.get(&wall.id);
+            let wall = &st.walls[index];
+            let image = st
+                .images
+                .get(&wall.id)
+                .or_else(|| retained.get(&wall.id).cloned());
             if image.is_none()
                 && st.pending.len() < 24
                 && !st.pending.contains(&wall.id)
@@ -250,7 +269,7 @@ fn render(window: &ProfileWindow, st: &mut ProfileState) -> Vec<(usize, String)>
             {
                 if let Some(url) = wall.thumb_url().filter(|url| safe_thumb(url)) {
                     st.pending.insert(wall.id.clone());
-                    jobs.push((item.index, url.to_owned()));
+                    jobs.push((index, url.to_owned()));
                 } else {
                     st.failed.insert(wall.id.clone());
                 }
@@ -270,15 +289,23 @@ fn render(window: &ProfileWindow, st: &mut ProfileState) -> Vec<(usize, String)>
                 .into(),
                 thumb: image.clone().unwrap_or_default(),
                 loaded: image.is_some(),
-                x: item.rect.x as f32,
-                y: item.rect.y as f32,
-                w: item.rect.w as f32,
-                h: item.rect.h as f32,
+                x: item.x,
+                y: item.y,
+                w: item.w,
+                h: item.h,
             })
         })
         .collect::<Vec<_>>();
-    window.set_content_height(layout.content_height as f32);
-    window.set_cards(slint::ModelRc::new(VecModel::from(cards)));
+    window.set_content_height(content_height);
+    if resized {
+        st.offset = offset.min((content_height - window.get_gallery_visible_height()).max(0.0));
+        window.set_gallery_content_y(-st.offset);
+    }
+    let current = window.get_cards();
+    let updated = gallery_layout::sync_model(current.clone(), cards, |card| card.id.as_str());
+    if current != updated {
+        window.set_cards(updated);
+    }
     window.set_loaded_count(st.walls.len() as i32);
     window.set_has_next(!st.exhausted && st.page > 0);
     window.set_load_error(st.load_error);

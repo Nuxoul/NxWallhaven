@@ -41,10 +41,10 @@ export component AppWindow inherits Window {
     in-out property <[Card]> cards;
     in-out property <length> content-height: 0px;
     in-out property <length> browse-position: 0px;
-    out property <length> scroll-offset: 0px;
-    out property <length> scroll-extent: 0px;
-    out property <length> viewport-height: 0px;
-    in-out property <length> browse-width: 0px;
+    out property <length> scroll-offset: -scroll.content-y;
+    out property <length> scroll-extent: scroll.content-height;
+    out property <length> viewport-height: scroll.visible-height;
+    out property <length> browse-width: scroll.visible-width;
     out property <float> collection-sidebar-left: (collection-frame.x + collection-sidebar.x) / 1px;
     in-out property <int> screen: 0;
     in-out property <string> status: "就绪";
@@ -189,6 +189,7 @@ export component AppWindow inherits Window {
         }
         body := Rectangle {
             vertical-stretch: 1;
+            clip: true;
             // Screens stay instantiated: details/back must preserve scroll state.
             Rectangle {
                 visible: root.screen == 0; width: parent.width; height: parent.height;
@@ -344,18 +345,6 @@ export component AppWindow inherits Window {
                                 thumb: card.thumb; label: card.label; loaded: card.loaded;
                                 clicked => { root.card-clicked(card.id); }
                             }
-                        }
-                        changed content-y => {
-                            root.scroll-offset = -scroll.content-y;
-                            root.scroll-extent = scroll.content-height;
-                            root.viewport-height = scroll.visible-height;
-                            root.scrolled(-scroll.content-y);
-                        }
-                        changed visible-width => {
-                            root.browse-width = scroll.visible-width;
-                            root.resized(scroll.visible-width);
-                            root.scroll-extent = scroll.content-height;
-                            root.viewport-height = scroll.visible-height;
                         }
                     }
                     HorizontalLayout {
