@@ -1,0 +1,46 @@
+# Build outputs
+/rust/target/
+**/build/
+/.gradle/
+/.kotlin/
+/dist/
+/out/
+
+# Local IDE / machine configuration
+/.idea/
+/.vscode/
+**/local.properties
+*.iml
+.DS_Store
+Thumbs.db
+
+# Diagnostics and runtime data (never source)
+*.log
+*.dmp
+*.part
+**/config.json
+**/image-cache-v1/
+**/webview-profile/
+**/WebView2/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Credentials, signing keys and local environment files
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+**/keystore.properties
+**/signing.properties
+
+# Python helpers
+__pycache__/
+*.py[cod]

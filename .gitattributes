@@ -1,0 +1,14 @@
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.slint text eol=lf
+*.md text eol=lf
+*.kts text eol=lf
+*.kt text eol=lf
+*.sh text eol=lf
+/gradlew text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.ico binary
+*.jar binary

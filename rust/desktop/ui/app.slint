@@ -1,0 +1,679 @@
+import { ScrollView, LineEdit, Button, ComboBox, CheckBox, Palette } from "std-widgets.slint";
+import { StudioTheme, StudioTitleBar, SectionHeading, SurfaceGroup, StatusNotice, NavigationTab, MetadataRow } from "design.slint";
+export { ProfileWindow, ProfileField, ProfileCard } from "profile.slint";
+export { DetailWindow, DetailTag, DetailSwatch } from "detail.slint";
+
+component WallCard inherits Rectangle {
+    in property <image> thumb;
+    in property <string> label;
+    in property <length> card-w;
+    in property <length> card-h;
+    in property <bool> loaded;
+    in property <bool> favorited;
+    in property <bool> favorite-enabled: true;
+    callback favorite-clicked();
+    callback clicked();
+    width: card-w; height: card-h; border-radius: 5px; clip: true; background: #202228;
+    Image { source: root.thumb; width: parent.width; height: parent.height; image-fit: contain; visible: root.loaded; }
+    Text { text: "加载中"; color: #a5a8af; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; visible: !root.loaded; }
+    Rectangle {
+        y: parent.height - 21px; height: 21px; width: parent.width; background: #000000aa;
+        Text { text: root.label; x: 6px; width: parent.width - 12px; height: parent.height; vertical-alignment: center; color: #f1f1f1; font-size: 11px; overflow: elide; }
+    }
+    area := TouchArea { clicked => { root.clicked(); } }
+    Rectangle {
+        visible: area.has-hover || favorite-area.has-hover;
+        x: parent.width - 28px; y: 4px; width: 24px; height: 24px;
+        border-radius: 4px; background: favorite-area.has-hover ? #3b4255 : #11151d99;
+        border-width: favorite-area.has-hover || root.favorited ? 1px : 0px; border-color: root.favorited ? #ff8cae : #7b8795;
+        Text { text: root.favorited ? "♥" : "♡"; color: root.favorited ? #ff8cae : #ffffff; font-size: 16px; horizontal-alignment: center; vertical-alignment: center; }
+        favorite-area := TouchArea { enabled: root.favorite-enabled; clicked => { root.favorite-clicked(); } }
+    }
+    border-width: area.has-hover || favorite-area.has-hover ? 2px : 0px; border-color: #79b8ff;
+}
+export struct Card { thumb: image, label: string, x: length, y: length, w: length, h: length, loaded: bool, id: string, favorited: bool }
+export struct TagChoice { name: string, query: string }
+export struct Swatch { value: string, tint: brush }
+export struct CollectionChoice { label: string, count-label: string, visibility: string }
+
+export component AppWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    in-out property <[Card]> cards;
+    in-out property <length> content-height: 0px;
+    in-out property <length> browse-position: 0px;
+    out property <length> scroll-offset: 0px;
+    out property <length> scroll-extent: 0px;
+    out property <length> viewport-height: 0px;
+    in-out property <length> browse-width: 0px;
+    out property <float> collection-sidebar-left: (collection-frame.x + collection-sidebar.x) / 1px;
+    in-out property <int> screen: 0;
+    in-out property <string> status: "就绪";
+    in-out property <bool> busy: false;
+    in-out property <bool> has-more: false;
+    in-out property <string> query-text: "";
+    in-out property <bool> cat-general: true;
+    in-out property <bool> cat-anime: true;
+    in-out property <bool> cat-people: true;
+    in-out property <bool> sfw: true;
+    in-out property <bool> sketchy: false;
+    in-out property <bool> nsfw: false;
+    in-out property <int> sort-index: 0;
+    in-out property <[string]> sort-options: ["最新", "相关度", "随机", "浏览量", "收藏量", "排行榜"];
+    in-out property <bool> advanced-open: false;
+    in-out property <int> order-index: 0;
+    in-out property <int> resolution-index: 0;
+    in-out property <string> min-width-input: "";
+    in-out property <string> min-height-input: "";
+    in-out property <bool> ratio-wide: false;
+    in-out property <bool> ratio-desktop: false;
+    in-out property <bool> ratio-ultrawide: false;
+    in-out property <bool> ratio-classic: false;
+    in-out property <bool> ratio-portrait: false;
+    in-out property <bool> ratio-square: false;
+    in-out property <string> color-filter: "";
+    in-out property <[Swatch]> palette;
+    in-out property <int> top-range-index: 3;
+    in-out property <string> filter-error: "";
+    in-out property <string> api-key-input: "";
+    in-out property <bool> has-api-key: false;
+    in-out property <bool> nsfw-enabled: false;
+    in-out property <string> download-dir-input: "";
+    in-out property <int> layout-mode: 0;
+    in-out property <[string]> layout-options: ["自适应瀑布流（保留原图比例）", "统一网格（16:10）"];
+    in-out property <string> settings-status: "";
+    in-out property <image> detail-image;
+    in-out property <bool> detail-loaded: false;
+    in-out property <bool> detail-busy: false;
+    in-out property <bool> downloading: false;
+    in-out property <string> detail-id: "";
+    in-out property <string> detail-resolution: "";
+    in-out property <string> detail-size: "";
+    in-out property <string> detail-category: "";
+    in-out property <string> detail-purity: "";
+    in-out property <string> detail-uploader: "";
+    in-out property <bool> detail-uploader-available: false;
+    in-out property <string> detail-views: "";
+    in-out property <string> detail-date: "";
+    in-out property <string> detail-tags: "";
+    in-out property <string> detail-colors: "";
+    in-out property <string> detail-favorites: "";
+    in-out property <string> detail-format: "";
+    in-out property <[TagChoice]> detail-tag-choices;
+    in-out property <[Swatch]> detail-palette;
+    in-out property <bool> wallpaper-busy: false;
+    in-out property <string> detail-download-msg: "";
+    in-out property <float> zoom: 1;
+    in-out property <length> pan-x: 0px;
+    in-out property <length> pan-y: 0px;
+    in-out property <bool> collection-mode: false;
+    in-out property <[CollectionChoice]> collections;
+    in-out property <bool> collections-busy: false;
+    in-out property <string> collections-status: "尚未加载收藏夹";
+    in-out property <string> collection-owner-input: "";
+    in-out property <string> collection-title: "请选择一个收藏夹";
+    in-out property <bool> collection-selected: false;
+    in-out property <int> selected-collection-index: -1;
+    in-out property <string> account-status: "未连接账号";
+    in-out property <bool> account-busy: false;
+    in-out property <bool> account-verified: false;
+    in-out property <bool> web-authenticated: false;
+    in-out property <bool> web-busy: false;
+    in-out property <string> web-status: "网站会话未登录";
+    in-out property <bool> favorite-busy: false;
+    in-out property <bool> favorite-known: false;
+    in-out property <bool> is-favorite: false;
+    in-out property <[string]> favorite-targets;
+    in-out property <int> favorite-target-index: 0;
+    callback search();
+    callback card-clicked(string);
+    callback open-uploader();
+    callback card-favorite(string);
+    callback scrolled(length);
+    callback load-more();
+    callback go-settings();
+    callback go-back();
+    callback save-settings();
+    callback clear-key();
+    callback layout-changed(int);
+    callback download-current();
+    callback open-in-browser();
+    callback reset-filters();
+    callback search-tag(string);
+    callback search-color(string);
+    callback copy-link();
+    callback set-wallpaper();
+    callback open-download-dir();
+    callback resized(length);
+    callback go-browse();
+    callback go-collections();
+    callback load-collections(bool);
+    callback open-collection(int);
+    callback refresh-collection();
+    callback verify-account();
+    callback manage-collection();
+    callback favorite-on-website();
+    callback web-refresh-favorite();
+    callback web-toggle-favorite();
+    out property <length> gallery-top: body.y + scroll.y;
+    out property <string> footer-message: root.collection-mode && !root.collection-selected ? "" : (root.busy ? "正在加载，请稍候…" : (root.cards.length == 0 ? "" : (root.has-more ? "接近底部时自动加载" : "已到列表末尾")));
+    out property <length> advanced-panel-height: advanced-panel.height;
+    out property <length> resolution-label-left: resolution-label.x;
+    out property <length> filter-actions-bottom: filter-actions.y + filter-actions.height;
+    out property <length> caption-icon-center-y: main-caption.icon-center-y;
+    out property <length> caption-text-center-y: main-caption.text-center-y;
+    no-frame: true;
+    resize-border-width: root.maximized ? 0px : 6px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    title: "WallHaven Studio";
+    preferred-width: 1280px; preferred-height: 820px; min-width: 860px; min-height: 600px;
+    max-width: 100000px; max-height: 100000px;
+    background: StudioTheme.canvas;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+    VerticalLayout {
+        main-caption := StudioTitleBar { caption: "WallHaven Studio"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        Rectangle {
+            height: 64px; background: StudioTheme.panel;
+            HorizontalLayout {
+                padding-left: 18px; padding-right: 18px; padding-top: 14px; padding-bottom: 14px; spacing: 10px;
+                NavigationTab { text: "发现壁纸"; selected: !root.collection-mode && root.screen == 0; clicked => { if root.collection-mode || root.screen != 0 { root.go-browse(); } } }
+                NavigationTab { text: "我的收藏"; selected: root.collection-mode; clicked => { root.go-collections(); } }
+                Rectangle { width: 8px; }
+                if root.screen == 0 && !root.collection-mode : LineEdit { text <=> root.query-text; placeholder-text: "关键词 / +标签 / -标签 / @作者 / like:id"; horizontal-stretch: 1; height: 36px; accepted => { root.search(); } }
+                if root.screen != 0 || root.collection-mode : Text { text: root.screen == 1 ? "壁纸详情" : "收藏与灵感"; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 1; }
+                if root.screen == 0 && !root.collection-mode : Button { text: "搜索"; primary: true; width: 76px; height: 36px; clicked => { root.search(); } }
+                Rectangle { width: 6px; height: 6px; vertical-stretch: 0; border-radius: 3px; background: root.web-authenticated ? #82c8a0 : #626b79; accessible-role: none; }
+                Button { text: "账号与设置"; width: 104px; height: 36px; clicked => { root.go-settings(); } }
+                if root.screen == 1 : Button { text: "返回列表"; width: 90px; height: 36px; clicked => { root.go-back(); } }
+            }
+        }
+        body := Rectangle {
+            vertical-stretch: 1;
+            // Screens stay instantiated: details/back must preserve scroll state.
+            Rectangle {
+                visible: root.screen == 0; width: parent.width; height: parent.height;
+                collection-frame := Rectangle {
+                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    collection-sidebar := Rectangle {
+                        x: 0px; y: 0px;
+                        visible: root.collection-mode; width: root.collection-mode ? 270px : 0px; height: parent.height; background: StudioTheme.panel;
+                        VerticalLayout {
+                            padding: 16px; spacing: 12px;
+                            Text { text: "收藏夹"; color: StudioTheme.text; font-size: 19px; font-weight: 600; }
+                            Text { text: root.web-authenticated ? "已连接网站账号" : root.account-status; color: StudioTheme.muted; font-size: 11px; wrap: word-wrap; }
+                            Button { visible: !root.web-authenticated; text: root.account-busy ? "验证中…" : "验证已保存的 Key"; enabled: root.has-api-key && !root.account-busy; clicked => { root.verify-account(); } }
+                            LineEdit { text <=> root.collection-owner-input; placeholder-text: "Wallhaven 用户名"; accepted => { root.load-collections(false); } }
+                            HorizontalLayout {
+                                Button { text: "我的收藏夹"; enabled: (root.has-api-key || root.web-authenticated) && !root.collections-busy; clicked => { root.load-collections(true); } }
+                                Button { text: "公开收藏"; enabled: !root.collections-busy; clicked => { root.load-collections(false); } }
+                            }
+                            Text { text: root.collections-busy ? "正在加载收藏夹…" : root.collections-status; color: #afd1ff; font-size: 11px; wrap: word-wrap; }
+                            ScrollView {
+                                vertical-stretch: 1;
+                                content-height: collection-list.preferred-height;
+                                content-width: self.visible-width;
+                                collection-list := VerticalLayout {
+                                    width: parent.visible-width; spacing: 7px;
+                                    for collection[index] in root.collections : Rectangle {
+                                        background: root.selected-collection-index == index ? StudioTheme.selected : (collection-hover.has-hover ? StudioTheme.elevated : transparent);
+                                        border-radius: 6px; height: max(80px, collection-name.preferred-height + 46px);
+                                        Rectangle { visible: root.selected-collection-index == index; x: 0px; y: 20px; width: 3px; height: parent.height - 40px; background: StudioTheme.accent; border-radius: 2px; }
+                                        VerticalLayout {
+                                            padding: 12px; spacing: 6px;
+                                            collection-name := Text { text: collection.label; color: StudioTheme.text; wrap: word-wrap; font-weight: 600; font-size: 13px; }
+                                            Text { text: collection.count-label + "  " + collection.visibility; color: StudioTheme.muted; font-size: 11px; }
+                                        }
+                                        collection-hover := TouchArea { clicked => { root.open-collection(index); } }
+                                    }
+                                }
+                            }
+                            Button { text: "管理收藏夹"; clicked => { root.manage-collection(); } }
+                        }
+                    }
+                    Rectangle {
+                        x: root.collection-mode ? 270px : 0px;
+                        width: parent.width - self.x; height: parent.height;
+                    VerticalLayout {
+                        Rectangle {
+                            visible: root.collection-mode; height: root.collection-mode ? 92px : 0px; background: StudioTheme.canvas;
+                            VerticalLayout {
+                                padding: 16px; spacing: 10px;
+                                Text { text: root.collection-title; color: StudioTheme.text; font-size: 19px; font-weight: 600; overflow: elide; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    CheckBox { text: "SFW"; checked <=> root.sfw; toggled => { root.refresh-collection(); } }
+                                    CheckBox { text: "Sketchy"; checked <=> root.sketchy; toggled => { root.refresh-collection(); } }
+                                    CheckBox { text: "NSFW"; checked <=> root.nsfw; enabled: root.nsfw-enabled && root.has-api-key; toggled => { root.refresh-collection(); } }
+                                    Button { text: "刷新内容"; enabled: root.collection-selected && !root.busy; clicked => { root.refresh-collection(); } }
+                                    Text { text: root.status; color: #b3b7bf; font-size: 11px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                    Rectangle {
+                        visible: !root.collection-mode; height: root.collection-mode ? 0px : 52px; background: StudioTheme.panel;
+                        HorizontalLayout {
+                            padding-left: 18px; padding-right: 18px; padding-top: 8px; padding-bottom: 8px; spacing: 12px;
+                            CheckBox { text: "综合"; checked <=> root.cat-general; toggled => { root.search(); } }
+                            CheckBox { text: "动漫"; checked <=> root.cat-anime; toggled => { root.search(); } }
+                            CheckBox { text: "人物"; checked <=> root.cat-people; toggled => { root.search(); } }
+                            Rectangle { width: 1px; background: #3a3c42; }
+                            CheckBox { text: "SFW"; checked <=> root.sfw; toggled => { root.search(); } }
+                            CheckBox { text: "Sketchy"; checked <=> root.sketchy; toggled => { root.search(); } }
+                            CheckBox { text: "NSFW"; checked <=> root.nsfw; enabled: root.nsfw-enabled && root.has-api-key; toggled => { root.search(); } }
+                            ComboBox { model: root.sort-options; current-index <=> root.sort-index; width: 110px; height: 36px; selected => { root.search(); } }
+                            Button { text: root.advanced-open ? "收起筛选" : "高级筛选"; width: 94px; height: 36px; clicked => { root.advanced-open = !root.advanced-open; } }
+                            Text { text: root.status; color: #b3b7bf; font-size: 11px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
+                    }
+                    advanced-panel := Rectangle {
+                        visible: root.advanced-open && !root.collection-mode;
+                        height: self.visible ? 174px + (root.sort-index == 5 ? 44px : 0px) + (root.filter-error == "" ? 0px : filter-error-notice.preferred-height + 12px) : 0px;
+                        background: StudioTheme.panel;
+                        advanced-body := VerticalLayout {
+                            x: 0px; y: 0px; width: parent.width; height: 174px + (root.sort-index == 5 ? 44px : 0px);
+                            padding-left: 18px; padding-right: 18px; padding-top: 12px; padding-bottom: 16px; spacing: 12px;
+                            HorizontalLayout {
+                                height: 32px;
+                                spacing: 8px;
+                                Text { text: "排序方向"; width: 60px; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 0; }
+                                ComboBox { model: ["降序", "升序"]; current-index <=> root.order-index; width: 90px; height: 32px; }
+                                Rectangle { width: 12px; }
+                                resolution-label := Text { text: "最小分辨率"; width: 72px; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 0; }
+                                ComboBox { model: ["不限", "1920×1080", "2560×1440", "3840×2160", "自定义"]; current-index <=> root.resolution-index; width: 150px; height: 32px; }
+                                if root.resolution-index == 4 : LineEdit { text <=> root.min-width-input; placeholder-text: "最小宽"; width: 80px; height: 32px; }
+                                if root.resolution-index == 4 : Text { text: "×"; color: StudioTheme.muted; horizontal-stretch: 0; vertical-alignment: center; }
+                                if root.resolution-index == 4 : LineEdit { text <=> root.min-height-input; placeholder-text: "最小高"; width: 80px; height: 32px; }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            if root.sort-index == 5 : HorizontalLayout {
+                                height: 32px;
+                                spacing: 8px;
+                                Text { text: "榜单范围"; width: 60px; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 0; }
+                                ComboBox { model: ["1 天", "3 天", "1 周", "1 个月", "3 个月", "6 个月", "1 年"]; current-index <=> root.top-range-index; width: 112px; height: 32px; }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                height: 24px;
+                                spacing: 12px;
+                                Text { text: "宽高比"; width: 56px; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 0; }
+                                CheckBox { text: "16:9"; checked <=> root.ratio-wide; }
+                                CheckBox { text: "16:10"; checked <=> root.ratio-desktop; }
+                                CheckBox { text: "21:9"; checked <=> root.ratio-ultrawide; }
+                                CheckBox { text: "4:3"; checked <=> root.ratio-classic; }
+                                CheckBox { text: "9:16"; checked <=> root.ratio-portrait; }
+                                CheckBox { text: "1:1"; checked <=> root.ratio-square; }
+                                Text { text: "可多选，留空不限"; color: StudioTheme.muted; font-size: 11px; vertical-alignment: center; horizontal-stretch: 0; }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 6px;
+                                Text { text: "颜色"; width: 62px; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 0; }
+                                for swatch in root.palette : Rectangle {
+                                    width: 22px; height: 22px; background: swatch.tint; border-radius: 3px;
+                                    border-width: root.color-filter == swatch.value ? 3px : 1px;
+                                    border-color: root.color-filter == swatch.value ? StudioTheme.accent : #686b73;
+                                    TouchArea { clicked => { root.color-filter = swatch.value; } }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            filter-actions := HorizontalLayout {
+                                height: 32px;
+                                spacing: 8px;
+                                LineEdit { text <=> root.color-filter; placeholder-text: "十六进制颜色，如 66cccc"; width: 260px; height: 32px; accepted => { root.search(); } }
+                                Button { text: "应用筛选"; primary: true; height: 32px; clicked => { root.search(); } }
+                                Button { text: "重置筛选"; height: 32px; clicked => { root.reset-filters(); } }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                        filter-error-notice := Text { visible: root.filter-error != ""; x: 18px; y: advanced-body.height - 4px; width: parent.width - 36px; text: root.filter-error; color: StudioTheme.danger; font-size: 12px; wrap: word-wrap; }
+                        Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: #ffffff0c; }
+                    }
+                    scroll := ScrollView {
+                        vertical-stretch: 1;
+                        content-height: root.content-height + 16px;
+                        content-width: self.visible-width;
+                        content-y <=> root.browse-position;
+                        mouse-drag-pan-enabled: true;
+                        Rectangle {
+                            width: scroll.visible-width; height: root.content-height + 16px;
+                            for card in root.cards : WallCard {
+                                x: card.x; y: card.y; card-w: card.w; card-h: card.h;
+                                favorited: card.favorited; favorite-enabled: !root.web-busy;
+                                favorite-clicked => { root.card-favorite(card.id); }
+                                thumb: card.thumb; label: card.label; loaded: card.loaded;
+                                clicked => { root.card-clicked(card.id); }
+                            }
+                        }
+                        changed content-y => {
+                            root.scroll-offset = -scroll.content-y;
+                            root.scroll-extent = scroll.content-height;
+                            root.viewport-height = scroll.visible-height;
+                            root.scrolled(-scroll.content-y);
+                        }
+                        changed visible-width => {
+                            root.browse-width = scroll.visible-width;
+                            root.resized(scroll.visible-width);
+                            root.scroll-extent = scroll.content-height;
+                            root.viewport-height = scroll.visible-height;
+                        }
+                    }
+                    HorizontalLayout {
+                        height: 44px; padding-left: 18px; padding-right: 12px; padding-top: 6px; padding-bottom: 6px;
+                        Text { text: root.footer-message; color: StudioTheme.muted; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; }
+                        if root.has-more : Button { text: root.busy ? "加载中…" : "加载更多"; enabled: !root.busy; clicked => { root.load-more(); } width: 100px; height: 32px; }
+                    }
+                }
+                    if root.cards.length == 0 : Rectangle {
+                        x: 0px; y: root.collection-mode ? 92px : (52px + advanced-panel.height);
+                        width: parent.width; height: max(0px, parent.height - self.y - 44px);
+                        VerticalLayout {
+                            alignment: center; padding: 32px; spacing: 12px;
+                            Text { text: root.busy ? "正在加载壁纸…" : (root.collection-mode && !root.collection-selected ? "打开一个收藏夹" : "没有可显示的壁纸"); color: StudioTheme.text; font-size: 20px; font-weight: 600; horizontal-alignment: center; }
+                            Text { text: root.busy ? "图片会分批显示，你可以继续浏览。" : (root.collection-mode && !root.collection-selected ? "从左侧选择收藏夹，或先加载你的收藏。" : "试试调整关键词或内容筛选，再重新搜索。"); color: StudioTheme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+                        }
+                    }
+                    }
+                    }
+            }
+            Rectangle {
+                visible: root.screen == 1; width: parent.width; height: parent.height;
+                HorizontalLayout {
+                    padding: 12px; spacing: 12px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        Rectangle {
+                            background: #101114; clip: true; vertical-stretch: 1;
+                            Image {
+                                source: root.detail-image;
+                                width: parent.width * root.zoom; height: parent.height * root.zoom;
+                                x: (parent.width - self.width) / 2 + root.pan-x;
+                                y: (parent.height - self.height) / 2 + root.pan-y;
+                                image-fit: contain; visible: root.detail-loaded;
+                            }
+                            Text { text: root.detail-busy ? "正在加载原图预览…" : ""; color: #ddd; x: 10px; y: 10px; }
+                            TouchArea {
+                                private property <length> old-x;
+                                private property <length> old-y;
+                                pointer-event(event) => {
+                                    if event.kind == PointerEventKind.down { self.old-x = root.pan-x; self.old-y = root.pan-y; }
+                                }
+                                moved => { if self.pressed { root.pan-x = self.old-x + self.mouse-x - self.pressed-x; root.pan-y = self.old-y + self.mouse-y - self.pressed-y; } }
+                                scroll-event(event) => { root.zoom = min(8, max(1, root.zoom + (event.delta-y > 0px ? 0.2 : -0.2))); accept }
+                                double-clicked => { root.zoom = 1; root.pan-x = 0px; root.pan-y = 0px; }
+                            }
+                        }
+                        HorizontalLayout {
+                            height: 36px; spacing: 8px;
+                            Button { text: "缩小"; clicked => { root.zoom = max(1, root.zoom - 0.25); } }
+                            Button { text: "适应窗口"; clicked => { root.zoom = 1; root.pan-x = 0px; root.pan-y = 0px; } }
+                            Button { text: "放大"; clicked => { root.zoom = min(8, root.zoom + 0.25); } }
+                            Text { text: "滚轮缩放 · 拖动平移"; color: #aaa; vertical-alignment: center; horizontal-stretch: 1; font-size: 11px; }
+                        }
+                    }
+                    ScrollView {
+                        width: 300px;
+                        content-height: sidebar.preferred-height;
+                        content-width: self.visible-width;
+                        sidebar := VerticalLayout {
+                            width: parent.visible-width;
+                            padding: 12px; spacing: 8px;
+                            Text { text: "ID  " + root.detail-id; color: #79b8ff; font-size: 15px; font-weight: 700; }
+                            MetadataRow { label: "分辨率"; value: root.detail-resolution; }
+                            MetadataRow { label: "体积"; value: root.detail-size; }
+                            MetadataRow { label: "格式"; value: root.detail-format; }
+                            MetadataRow { label: "分类"; value: root.detail-category + " / " + root.detail-purity; }
+                            HorizontalLayout {
+                                spacing: 12px; height: 32px;
+                                Text { text: "上传者"; width: 52px; color: StudioTheme.muted; font-size: 12px; vertical-alignment: center; }
+                                Button { text: root.detail-uploader; enabled: root.detail-uploader-available; horizontal-stretch: 1; height: 32px; clicked => { root.open-uploader(); } }
+                            }
+                            MetadataRow { label: "浏览"; value: root.detail-views; }
+                            MetadataRow { label: "收藏"; value: root.detail-favorites; }
+                            MetadataRow { label: "上传时间"; value: root.detail-date; }
+                            Text { text: "主色 · 点击搜索"; color: #b3b7bf; font-size: 12px; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                for swatch in root.detail-palette : Rectangle {
+                                    width: 28px; height: 26px; background: swatch.tint; border-radius: 4px;
+                                    border-width: 1px; border-color: #686b73;
+                                    TouchArea { clicked => { root.search-color(swatch.value); } }
+                                }
+                            }
+                            Button { text: root.downloading ? "下载中…" : "下载原图"; primary: true; enabled: !root.downloading; clicked => { root.download-current(); } }
+                            Button { text: root.wallpaper-busy ? "正在准备壁纸…" : "设为桌面壁纸"; enabled: !root.wallpaper-busy; clicked => { root.set-wallpaper(); } }
+                            HorizontalLayout {
+                                Button { text: "复制链接"; clicked => { root.copy-link(); } }
+                                Button { text: "浏览器打开"; clicked => { root.open-in-browser(); } }
+                            }
+                            Text { text: root.web-status; color: #aeb5c0; wrap: word-wrap; font-size: 11px; }
+                            ComboBox { visible: root.web-authenticated && root.favorite-known && !root.is-favorite && root.favorite-targets.length > 1; model: root.favorite-targets; current-index <=> root.favorite-target-index; }
+                            Button { text: root.favorite-busy ? "正在确认收藏状态…" : (!root.web-authenticated ? "登录网站账号以收藏" : (!root.favorite-known ? "读取站内收藏状态" : (root.is-favorite ? "取消站内收藏" : "收藏到站内账号"))); enabled: !root.favorite-busy && !root.web-busy; clicked => { if !root.web-authenticated { root.go-settings(); } else if !root.favorite-known { root.web-refresh-favorite(); } else { root.web-toggle-favorite(); } } }
+                            Button { text: "刷新收藏状态"; enabled: root.web-authenticated && !root.favorite-busy && !root.web-busy; clicked => { root.web-refresh-favorite(); } }
+                            Button { text: "在网站查看 / 管理"; clicked => { root.favorite-on-website(); } }
+                            Button { text: "打开下载目录"; clicked => { root.open-download-dir(); } }
+                            Text { text: root.detail-download-msg; color: #afd1ff; wrap: word-wrap; font-size: 11px; }
+                            Text { text: "标签 · 点击搜索"; color: #b3b7bf; font-size: 12px; }
+                            for tag in root.detail-tag-choices : Button { text: tag.name; clicked => { root.search-tag(tag.query); } }
+                            Text { visible: root.detail-tag-choices.length == 0; text: root.detail-busy ? "标签加载中…" : "暂无标签"; color: #9ca3af; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    in-out property <string> api-key-input: "";
+    in-out property <bool> has-api-key: false;
+    in-out property <bool> nsfw-enabled: false;
+    in-out property <string> download-dir-input: "";
+    in-out property <int> layout-mode: 0;
+    in-out property <string> settings-status: "";
+    in-out property <string> account-username-input: "";
+    in-out property <string> account-status: "未连接账号";
+    in-out property <bool> account-busy: false;
+    in-out property <string> web-status: "网站会话未登录";
+    in-out property <bool> web-busy: false;
+    in-out property <bool> web-authenticated: false;
+    in-out property <bool> web-session-present: false;
+    in-out property <string> cache-memory: "正在统计…";
+    in-out property <string> cache-disk: "正在统计本地文件…";
+    in-out property <string> cache-status;
+    in-out property <string> cache-directory;
+    in-out property <bool> cache-busy;
+    callback refresh-image-cache();
+    callback clear-image-cache();
+    callback web-login();
+    callback web-logout();
+    callback reload-web-login();
+    callback open-web-login();
+    callback verify-account();
+    callback open-account-website();
+    callback save-settings();
+    callback clear-key();
+    callback close-settings();
+    title: "WallHaven Studio — 设置";
+    no-frame: true; resize-border-width: root.maximized ? 0px : 6px;
+    preferred-width: 640px; preferred-height: 780px; min-width: 560px; min-height: 600px;
+    max-width: 100000px; max-height: 100000px;
+    background: StudioTheme.canvas; default-font-family: "Segoe UI"; default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    VerticalLayout {
+        StudioTitleBar { caption: "WallHaven Studio · 设置"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        ScrollView {
+            vertical-stretch: 1;
+            content-height: settings-body.preferred-height;
+            content-width: self.visible-width;
+            settings-body := VerticalLayout {
+                width: parent.visible-width; padding: 24px; spacing: 20px;
+                SectionHeading { heading: "设置"; description: "管理账号、浏览方式和下载位置"; }
+                SurfaceGroup {
+                    SectionHeading { heading: "网站账号"; description: "登录后可读取私有收藏夹、收藏图片和管理收藏夹。"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: root.web-busy ? "等待网页登录…" : (root.web-authenticated ? "打开账号会话" : "打开应用内网页登录"); primary: !root.web-authenticated; enabled: !root.web-busy; clicked => { root.web-login(); } }
+                        Button { text: root.web-busy ? "取消并清除登录数据" : "退出并清除登录数据"; enabled: root.web-session-present; clicked => { root.web-logout(); } }
+                    }
+                    StatusNotice { message: root.web-status; }
+                    Button { text: "验证卡住？重新加载登录页"; enabled: root.web-session-present && (!root.web-busy || !root.web-authenticated); clicked => { root.reload-web-login(); } }
+                    Text { text: "密码仅输入网站。独立浏览器资料保留登录记录，有效期由网站决定；不读取系统浏览器。安全验证需本人完成，不自动绕过。"; color: StudioTheme.muted; wrap: word-wrap; font-size: 11px; }
+                }
+                SurfaceGroup {
+                    SectionHeading { heading: "API 连接"; description: "可选，与网站登录独立。用于 API 查询及内容权限。"; }
+                    Text { text: "用户名"; color: StudioTheme.muted; font-size: 12px; }
+                    LineEdit { text <=> root.account-username-input; placeholder-text: "你的 Wallhaven 用户名"; }
+                    Text { text: root.has-api-key ? "Key 已保存并加密，尚需验证有效性" : "尚未保存 Key，可在网站账号设置中获取"; color: StudioTheme.muted; wrap: word-wrap; font-size: 12px; }
+                    LineEdit { text <=> root.api-key-input; input-type: password; placeholder-text: "输入新 Key；留空保留原 Key"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: root.account-busy ? "验证中…" : "验证已保存的 Key"; enabled: root.has-api-key && !root.account-busy; clicked => { root.verify-account(); } }
+                        Button { text: "网站账号设置"; clicked => { root.open-account-website(); } }
+                    }
+                    StatusNotice { message: root.account-status; }
+                    Button { text: "退出连接并清除 Key"; enabled: root.has-api-key; clicked => { root.clear-key(); } }
+                    Text { text: "新 Key 请先保存，再验证。用户名由你填写，接口不会返回账号名。"; color: StudioTheme.muted; wrap: word-wrap; font-size: 11px; }
+                }
+                SurfaceGroup {
+                    SectionHeading { heading: "浏览与下载"; description: "自适应布局保留完整图片比例，不额外裁切。"; }
+                    Text { text: "浏览布局"; color: StudioTheme.muted; font-size: 12px; }
+                    ComboBox { model: ["自适应瀑布流（保留原图比例）", "统一网格（16:10）"]; current-index <=> root.layout-mode; }
+                    CheckBox { text: "允许 NSFW 内容（默认关闭，需有效 API Key）"; checked <=> root.nsfw-enabled; }
+                    Text { text: "下载目录"; color: StudioTheme.muted; font-size: 12px; }
+                    LineEdit { text <=> root.download-dir-input; placeholder-text: "留空使用 图片 / WallHavenStudio"; }
+                    Text { text: "目录会在首次下载时创建，已有文件不会被覆盖。"; color: StudioTheme.muted; font-size: 11px; wrap: word-wrap; }
+                }
+                SurfaceGroup {
+                    SectionHeading { heading: "图片缓存"; description: "只清理图片加载缓存，不影响账号、登录、已下载图片和壁纸。"; }
+                    MetadataRow { label: "磁盘文件"; value: root.cache-disk; }
+                    MetadataRow { label: "绘制缓冲"; value: root.cache-memory; }
+                    Text { text: root.cache-directory; color: StudioTheme.muted; wrap: word-wrap; font-size: 11px; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: "刷新缓存大小"; enabled: !root.cache-busy; clicked => { root.refresh-image-cache(); } }
+                        Button { text: root.cache-busy ? "正在处理…" : "清除图片缓存"; enabled: !root.cache-busy; clicked => { root.clear-image-cache(); } }
+                    }
+                    Text { text: "原始图片文件缓存在此目录，下载时优先从缓存转存，不重复请求原图。清除不会删除下载、壁纸或登录资料；当前显示的图片保留。"; color: StudioTheme.muted; wrap: word-wrap; font-size: 11px; }
+                    if root.cache-status != "" : StatusNotice { message: root.cache-status; }
+                }
+            }
+        }
+        Rectangle {
+            height: root.settings-status == "" ? 68px : 96px; background: StudioTheme.panel;
+            VerticalLayout {
+                padding: 16px; spacing: 8px;
+                if root.settings-status != "" : Text { text: root.settings-status; color: #c1dcff; wrap: word-wrap; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: "关闭"; width: 90px; clicked => { root.close-settings(); } }
+                    Button { text: "保存设置"; primary: true; width: 112px; clicked => { root.save-settings(); } }
+                }
+            }
+        }
+    }
+}
+
+export component QuickFavoriteWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    in-out property <string> wallpaper-id;
+    in-out property <string> message: "正在读取收藏状态…";
+    in-out property <[string]> targets;
+    in-out property <int> target-index: 0;
+    in-out property <bool> favorited: false;
+    in-out property <bool> busy: false;
+    in-out property <bool> ready: false;
+    callback login();
+    callback apply-favorite();
+    callback retry();
+    callback close-dialog();
+    title: "WallHaven Studio — 收藏壁纸";
+    no-frame: true; resize-border-width: root.maximized ? 0px : 6px;
+    preferred-width: 520px; preferred-height: 380px; min-width: 460px; min-height: 340px;
+    max-width: 100000px; max-height: 100000px; background: StudioTheme.canvas;
+    default-font-family: "Segoe UI"; default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    VerticalLayout {
+        StudioTitleBar { caption: "WallHaven Studio · 收藏壁纸"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        VerticalLayout {
+            padding: 24px; spacing: 16px;
+            SectionHeading { heading: root.favorited ? "管理这张收藏" : "留住这张壁纸"; description: "壁纸 " + root.wallpaper-id; }
+            StatusNotice { message: root.message; }
+            if root.ready && !root.favorited : Text { text: "收藏到"; color: StudioTheme.muted; font-size: 12px; }
+            if root.ready && !root.favorited : ComboBox { model: root.targets; current-index <=> root.target-index; enabled: !root.busy; }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                spacing: 8px;
+                Button { text: "刷新状态"; enabled: !root.busy; clicked => { root.retry(); } }
+                if !root.ready : Button { text: "账号登录"; enabled: !root.busy; clicked => { root.login(); } }
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: root.busy ? "处理中…" : (root.favorited ? "取消收藏" : "确认收藏"); primary: !root.favorited; enabled: root.ready && !root.busy && (root.favorited || root.targets.length > 0); clicked => { root.apply-favorite(); } }
+            }
+        }
+    }
+}
+
+export component CollectionManagerWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    in-out property <[string]> collection-names;
+    in-out property <int> selected-index: 0;
+    in-out property <string> label-input: "";
+    in-out property <bool> public-input: false;
+    in-out property <bool> busy: false;
+    in-out property <bool> editable: false;
+    in-out property <bool> delete-confirmed: false;
+    in-out property <bool> visibility-confirmed: false;
+    in-out property <bool> visibility-unknown: false;
+    in-out property <string> message: "登录网站账号后可管理自己的收藏夹";
+    callback choose(int);
+    callback create-collection();
+    callback save-collection();
+    callback delete-collection();
+    callback refresh-list();
+    callback open-web-manager();
+    callback close-dialog();
+    title: "WallHaven Studio — 管理收藏夹";
+    no-frame: true; resize-border-width: root.maximized ? 0px : 6px;
+    preferred-width: 660px; preferred-height: 640px; min-width: 560px; min-height: 520px;
+    max-width: 100000px; max-height: 100000px; background: StudioTheme.canvas;
+    default-font-family: "Segoe UI"; default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    VerticalLayout {
+        StudioTitleBar { caption: "WallHaven Studio · 管理收藏夹"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        ScrollView {
+            content-height: manager-body.preferred-height; content-width: self.visible-width;
+            manager-body := VerticalLayout {
+                width: parent.visible-width; padding: 24px; spacing: 20px;
+                SectionHeading { heading: "整理你的收藏夹"; description: "操作将写入当前网站账号。选择已有收藏夹修改，或填写名称新建。"; }
+                SurfaceGroup {
+                    Text { text: "当前收藏夹"; color: StudioTheme.muted; font-size: 12px; }
+                    ComboBox { model: root.collection-names; current-index <=> root.selected-index; enabled: !root.busy; selected => { root.choose(root.selected-index); } }
+                    Text { text: "收藏夹名称"; color: StudioTheme.muted; font-size: 12px; }
+                    LineEdit { text <=> root.label-input; placeholder-text: "输入收藏夹名称"; enabled: !root.busy; }
+                    CheckBox { text: "公开收藏夹"; checked <=> root.public-input; enabled: !root.busy; }
+                    if root.visibility-unknown : CheckBox { text: "确认当前公开 / 私有选择"; checked <=> root.visibility-confirmed; enabled: !root.busy; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: "新建收藏夹"; enabled: !root.busy; clicked => { root.create-collection(); } }
+                        Button { text: "保存名称 / 可见性"; primary: true; enabled: root.editable && root.visibility-confirmed && !root.busy; clicked => { root.save-collection(); } }
+                    }
+                }
+                StatusNotice { message: root.message; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button { text: "刷新列表"; enabled: !root.busy; clicked => { root.refresh-list(); } }
+                    Button { text: "内置网页管理"; enabled: !root.busy; clicked => { root.open-web-manager(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                SurfaceGroup {
+                    Text { text: "删除收藏夹"; color: StudioTheme.danger; font-size: 14px; font-weight: 600; }
+                    Text { text: "此操作不可撤销。请先确认选中的收藏夹。"; color: StudioTheme.muted; wrap: word-wrap; font-size: 12px; }
+                    CheckBox { text: "我确认删除当前选中的收藏夹"; checked <=> root.delete-confirmed; enabled: root.editable && !root.busy; }
+                    Button { text: "删除选中收藏夹"; enabled: root.editable && root.delete-confirmed && !root.busy; clicked => { root.delete-collection(); } }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,29 @@
+101 ICON "wallhaven-studio.ico"
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEFLAGSMASK 0x3f
+FILEFLAGS 0
+FILEOS 0x40004
+FILETYPE 1
+FILESUBTYPE 0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "WallHaven Studio\0"
+      VALUE "FileDescription", "WallHaven Studio - Windows wallpaper client\0"
+      VALUE "FileVersion", "0.1.0\0"
+      VALUE "InternalName", "wh-desktop\0"
+      VALUE "OriginalFilename", "WallHavenStudio.exe\0"
+      VALUE "ProductName", "WallHaven Studio\0"
+      VALUE "ProductVersion", "0.1.0\0"
+      VALUE "LegalCopyright", "Independent third-party client. Not affiliated with wallhaven.cc.\0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

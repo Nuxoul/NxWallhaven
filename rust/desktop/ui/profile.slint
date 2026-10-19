@@ -1,0 +1,166 @@
+import { ScrollView, Button, ComboBox, CheckBox } from "std-widgets.slint";
+import { StudioTheme, StudioTitleBar, NavigationTab } from "design.slint";
+
+export struct ProfileField { label: string, value: string }
+export struct ProfileCard { thumb: image, label: string, id: string, x: length, y: length, w: length, h: length, loaded: bool, load-message: string }
+
+export component ProfileWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    in-out property <string> username;
+    in-out property <string> group-name: "—";
+    in-out property <string> biography: "尚未加载公开资料";
+    in-out property <image> avatar;
+    in-out property <bool> avatar-loaded;
+    in-out property <[ProfileField]> fields;
+    in-out property <int> tab: 0;
+    in-out property <bool> busy;
+    in-out property <string> message: "正在加载公开资料…";
+    in-out property <[ProfileCard]> cards;
+    in-out property <length> content-height;
+    in-out property <length> gallery-content-y: 0px;
+    out property <length> gallery-width: gallery.visible-width;
+    out property <length> gallery-visible-height: gallery.visible-height;
+    out property <length> gallery-offset: -gallery.content-y;
+    in-out property <int> loaded-count;
+    in-out property <bool> has-next;
+    in-out property <bool> load-error;
+    in-out property <[string]> collections;
+    in-out property <int> selected-collection: -1;
+    in-out property <string> gallery-title: "上传作品";
+    in-out property <bool> preview-open;
+    in-out property <image> preview;
+    in-out property <string> preview-title;
+    in-out property <string> preview-message;
+    in-out property <bool> sfw: true;
+    in-out property <bool> sketchy: false;
+    in-out property <bool> nsfw: false;
+    in-out property <bool> nsfw-allowed: false;
+    callback filters-changed();
+    callback select-tab(int);
+    callback reload();
+    callback load-more();
+    callback open-collection(int);
+    callback open-wallpaper(string);
+    callback close-preview();
+    no-frame: true;
+    resize-border-width: root.maximized ? 0px : 6px;
+    title: root.username + " 的主页 - WallHaven Studio";
+    preferred-width: 960px; preferred-height: 740px;
+    min-width: 760px; min-height: 560px;
+    max-width: 100000px; max-height: 100000px;
+    background: StudioTheme.canvas; default-font-family: "Segoe UI"; default-font-size: 13px;
+    VerticalLayout {
+        StudioTitleBar { caption: root.username + " 的主页"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        Rectangle {
+            height: 108px; background: StudioTheme.panel;
+            HorizontalLayout {
+                padding: 18px; spacing: 16px;
+                Rectangle {
+                    width: 72px; height: 72px; border-radius: 8px; clip: true; background: StudioTheme.elevated;
+                    Text { visible: !root.avatar-loaded; text: "用户"; color: StudioTheme.muted; horizontal-alignment: center; vertical-alignment: center; }
+                    Image { visible: root.avatar-loaded; source: root.avatar; width: parent.width; height: parent.height; image-fit: contain; }
+                }
+                VerticalLayout {
+                    spacing: 6px;
+                    Text { text: root.username; color: StudioTheme.text; font-size: 24px; font-weight: 600; overflow: elide; }
+                    Text { text: root.group-name; color: StudioTheme.muted; font-size: 12px; }
+                    Text { text: "Wallhaven 公开主页"; color: StudioTheme.muted; font-size: 11px; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: "刷新当前列表"; height: 32px; enabled: !root.busy; clicked => { root.reload(); } }
+            }
+        }
+        HorizontalLayout {
+            height: 48px; padding-left: 18px; spacing: 8px;
+            NavigationTab { text: "个人资料"; selected: root.tab == 0; clicked => { root.select-tab(0); } }
+            NavigationTab { text: "上传作品"; selected: root.tab == 1; clicked => { root.select-tab(1); } }
+            NavigationTab { text: "公开收藏"; selected: root.tab == 2; clicked => { root.select-tab(2); } }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "只读 · 内容按所选分级筛选"; color: StudioTheme.muted; vertical-alignment: center; font-size: 11px; }
+            Rectangle { width: 18px; }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            ScrollView {
+                visible: root.tab == 0 && !root.preview-open; width: parent.width; height: parent.height;
+                content-height: info.preferred-height; content-width: self.visible-width;
+                info := VerticalLayout {
+                    width: parent.visible-width; padding: 24px; spacing: 16px;
+                    Text { text: "个人简介"; color: StudioTheme.text; font-size: 16px; font-weight: 600; }
+                    Text { text: root.biography; color: StudioTheme.text; wrap: word-wrap; font-size: 13px; }
+                    Rectangle { height: 1px; background: StudioTheme.border; }
+                    Text { text: "公开信息"; color: StudioTheme.text; font-size: 16px; font-weight: 600; }
+                    for field in root.fields : HorizontalLayout {
+                        spacing: 20px;
+                        Text { text: field.label; width: 100px; color: StudioTheme.muted; }
+                        Text { text: field.value; color: StudioTheme.text; wrap: word-wrap; horizontal-stretch: 1; min-width: 0px; }
+                    }
+                    Text { visible: root.fields.length == 0; text: root.busy ? "正在读取公开信息…" : "未公开更多信息"; color: StudioTheme.muted; }
+                }
+            }
+            Rectangle {
+                visible: root.tab != 0 && !root.preview-open; width: parent.width; height: parent.height;
+                VerticalLayout {
+                    padding: 16px; spacing: 12px;
+                    HorizontalLayout {
+                        height: 28px; spacing: 12px;
+                        Text { text: "分级筛选"; color: StudioTheme.muted; vertical-alignment: center; }
+                        CheckBox { text: "SFW"; checked <=> root.sfw; toggled => { root.filters-changed(); } }
+                        CheckBox { text: "Sketchy"; checked <=> root.sketchy; toggled => { root.filters-changed(); } }
+                        CheckBox { text: "NSFW"; checked <=> root.nsfw; enabled: root.nsfw-allowed; toggled => { root.filters-changed(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if root.tab == 2 : HorizontalLayout {
+                        height: 36px; spacing: 8px;
+                        ComboBox { model: root.collections; current-index <=> root.selected-collection; horizontal-stretch: 1; enabled: root.collections.length > 0 && !root.busy; }
+                        Button { text: "查看收藏夹"; enabled: root.selected-collection >= 0 && !root.busy; clicked => { root.open-collection(root.selected-collection); } }
+                    }
+                    Text { text: root.gallery-title; color: StudioTheme.text; font-size: 15px; font-weight: 600; }
+                    gallery := ScrollView {
+                        vertical-stretch: 1;
+                        content-y <=> root.gallery-content-y;
+                        content-height: max(root.content-height, self.visible-height); content-width: self.visible-width;
+                        for card in root.cards : Rectangle {
+                            x: card.x; y: card.y; width: card.w; height: card.h;
+                            background: StudioTheme.elevated; border-radius: 5px; clip: true;
+                            border-width: hover.has-hover ? 2px : 0px; border-color: StudioTheme.accent;
+                            Image { source: card.thumb; visible: card.loaded; width: parent.width; height: parent.height; image-fit: contain; }
+                            Text { visible: !card.loaded; text: card.load-message; color: StudioTheme.muted; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+                            Rectangle {
+                                y: parent.height - 22px; height: 22px; width: parent.width; background: #000000aa;
+                                Text { x: 6px; width: parent.width - 12px; height: parent.height; text: card.label; color: #fff; font-size: 11px; vertical-alignment: center; overflow: elide; }
+                            }
+                            accessible-role: button; accessible-label: "查看壁纸 " + card.id;
+                            accessible-action-default => { root.open-wallpaper(card.id); }
+                            hover := TouchArea { clicked => { root.open-wallpaper(card.id); } }
+                        }
+                        if root.cards.length == 0 && root.loaded-count == 0 : Text { x: 8px; y: 24px; text: root.busy ? "正在读取作品…" : (root.tab == 2 ? "选择公开收藏夹查看筛选后的壁纸" : "没有符合筛选条件的作品"); color: StudioTheme.muted; }
+                    }
+                    HorizontalLayout {
+                        height: 34px; spacing: 8px;
+                        Text { text: "已加载 " + root.loaded-count + " 张 · " + (root.load-error ? "加载失败，可重试" : (root.busy ? "正在加载更多…" : (root.has-next ? "向下滚动加载更多" : "已到末尾"))); color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 1; }
+                        Button { visible: root.load-error; text: "重试加载更多"; enabled: !root.busy; clicked => { root.load-more(); } }
+                    }
+                }
+            }
+            if root.preview-open : Rectangle {
+                width: parent.width; height: parent.height; background: StudioTheme.canvas;
+                TouchArea { }
+                VerticalLayout {
+                    padding: 16px; spacing: 12px;
+                    HorizontalLayout {
+                        height: 34px;
+                        Text { text: root.preview-title; color: StudioTheme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                        Button { text: "返回主页列表"; clicked => { root.close-preview(); } }
+                    }
+                    Image { source: root.preview; image-fit: contain; vertical-stretch: 1; }
+                    Text { text: root.preview-message; color: StudioTheme.muted; wrap: word-wrap; }
+                }
+            }
+        }
+        Rectangle {
+            height: 44px; background: StudioTheme.panel;
+            Text { x: 18px; width: parent.width - 36px; height: parent.height; text: root.message; color: StudioTheme.muted; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        }
+    }
+}

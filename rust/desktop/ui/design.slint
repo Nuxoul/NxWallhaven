@@ -1,0 +1,112 @@
+export global StudioTheme {
+    out property <color> canvas: #141518;
+    out property <color> panel: #1b1d21;
+    out property <color> elevated: #252830;
+    out property <color> border: #343842;
+    out property <color> text: #edf0f5;
+    out property <color> muted: #a7afbd;
+    out property <color> accent: #79b8ff;
+    out property <color> selected: #24364c;
+    out property <color> danger: #ffb4ab;
+}
+
+component CaptionButton inherits Rectangle {
+    in property <int> kind;
+    in property <string> label;
+    callback clicked();
+    width: 46px; height: 40px;
+    background: touch.pressed ? (kind == 3 ? #a82432 : #3a414d) : (touch.has-hover ? (kind == 3 ? #c42b3a : #30353e) : transparent);
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: focus;
+    Image {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: 12px; height: 12px;
+        source: root.kind == 0 ? @image-url("icons/minimize.svg") : (root.kind == 1 ? @image-url("icons/maximize.svg") : (root.kind == 2 ? @image-url("icons/restore.svg") : @image-url("icons/close.svg")));
+        colorize: StudioTheme.text;
+    }
+    Rectangle { x: 3px; y: 3px; width: parent.width - 6px; height: parent.height - 6px; background: transparent; border-radius: 3px; border-width: focus.has-focus ? 1px : 0px; border-color: StudioTheme.accent; }
+    focus := FocusScope {
+        key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.clicked(); accept } else { reject } }
+    }
+    touch := TouchArea { clicked => { focus.focus(); root.clicked(); } }
+}
+
+export component StudioTitleBar inherits Rectangle {
+    in property <string> caption;
+    in property <bool> can-maximize: true;
+    in-out property <bool> maximized: false;
+    out property <length> icon-center-y: brand-icon.y + brand-icon.height / 2;
+    out property <length> text-center-y: caption-text.y + caption-text.height / 2;
+    callback minimize();
+    callback close-window();
+    height: 40px; background: StudioTheme.panel;
+    WindowMoveArea {
+        x: 0px; y: 0px; width: parent.width - controls.width; height: parent.height;
+        TouchArea { double-clicked => { if root.can-maximize { root.maximized = !root.maximized; } } }
+        brand-icon := Image {
+            x: 16px; y: (parent.height - self.height) / 2;
+            source: @image-url("icons/mark.svg"); width: 20px; height: 20px;
+        }
+        caption-text := Text {
+            x: 46px; y: 0px; width: max(0px, parent.width - 62px); height: parent.height;
+            text: root.caption; color: StudioTheme.text; font-size: 12px; font-weight: 600;
+            vertical-alignment: center; overflow: elide;
+        }
+    }
+    controls := HorizontalLayout {
+        x: parent.width - self.width; y: 0px; width: root.can-maximize ? 138px : 92px; height: parent.height; spacing: 0px;
+        CaptionButton { kind: 0; label: "最小化"; clicked => { root.minimize(); } }
+        if root.can-maximize : CaptionButton { kind: root.maximized ? 2 : 1; label: root.maximized ? "还原窗口" : "最大化"; clicked => { root.maximized = !root.maximized; } }
+        CaptionButton { kind: 3; label: "关闭窗口"; clicked => { root.close-window(); } }
+    }
+    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: #ffffff08; }
+}
+
+export component SectionHeading inherits VerticalLayout {
+    in property <string> heading;
+    in property <string> description;
+    spacing: 5px;
+    Text { text: root.heading; color: StudioTheme.text; font-size: 16px; font-weight: 600; }
+    if root.description != "" : Text { text: root.description; color: StudioTheme.muted; font-size: 12px; wrap: word-wrap; }
+}
+
+export component SurfaceGroup inherits Rectangle {
+    background: StudioTheme.panel; border-radius: 8px; border-width: 1px; border-color: #ffffff0c;
+    vertical-stretch: 0;
+    VerticalLayout { padding: 18px; spacing: 12px; @children }
+}
+
+export component StatusNotice inherits Rectangle {
+    in property <string> message;
+    visible: message != "";
+    background: #203044; border-radius: 6px;
+    min-height: message == "" ? 0px : notice.preferred-height + 24px;
+    vertical-stretch: 0;
+    notice := Text { x: 12px; y: 12px; width: parent.width - 24px; text: root.message; color: #c1dcff; font-size: 12px; wrap: word-wrap; }
+}
+
+export component NavigationTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+    width: 104px; height: 36px; border-radius: 5px;
+    background: touch.pressed ? #343b46 : (touch.has-hover ? StudioTheme.elevated : transparent);
+    accessible-role: button; accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: focus;
+    Text { text: root.text; color: root.selected ? StudioTheme.text : StudioTheme.muted; font-size: 13px; font-weight: root.selected ? 600 : 400; horizontal-alignment: center; vertical-alignment: center; accessible-role: none; }
+    Rectangle { visible: root.selected; x: 30px; y: parent.height - 3px; width: parent.width - 60px; height: 3px; background: StudioTheme.accent; border-radius: 2px; }
+    Rectangle { x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; border-radius: 4px; background: transparent; border-width: focus.has-focus ? 1px : 0px; border-color: StudioTheme.accent; }
+    focus := FocusScope { key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.clicked(); accept } else { reject } } }
+    touch := TouchArea { clicked => { focus.focus(); root.clicked(); } }
+}
+
+export component MetadataRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 12px;
+    Text { text: root.label; width: 52px; color: StudioTheme.muted; font-size: 12px; horizontal-stretch: 0; }
+    Text { text: root.value; color: StudioTheme.text; font-size: 13px; wrap: word-wrap; min-width: 0px; horizontal-stretch: 1; }
+}

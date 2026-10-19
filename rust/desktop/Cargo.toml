@@ -1,0 +1,46 @@
+[package]
+name = "wh-desktop"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wh-core = { path = "../core" }
+slint = { version = "1.18", features = ["raw-window-handle-06"] }
+raw-window-handle = "0.6"
+image = "0.25"
+reqwest = { workspace = true, features = ["cookies", "form"] }
+serde.workspace = true
+serde_json.workspace = true
+scraper = "0.26"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_LibraryLoader",
+] }
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
+windows = "0.62"
+webview2-com = "0.39"
+
+[build-dependencies]
+slint-build = "1.18"
+
+[[bin]]
+name = "wh-desktop"
+path = "src/main.rs"
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"
