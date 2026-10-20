@@ -104,9 +104,10 @@ internal fun DetailScreen(vm: NxViewModel) {
                                 modifier = Modifier.fillMaxSize().testTag("original-image"))
                         }
                     }
+                    OriginalPreview(state.detailPreview,loadedDimensions!=null,state.detailProgress,state.detailStage,Modifier.fillMaxSize())
                     val error = state.detailError ?: tileError
                     if (error != null) {
-                        Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)) {
+                        Surface(Modifier.align(Alignment.BottomCenter),color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)) {
                             Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 Icon(Icons.Outlined.BrokenImage, contentDescription = null, modifier = Modifier.size(40.dp))
@@ -114,17 +115,6 @@ internal fun DetailScreen(vm: NxViewModel) {
                                 Text(error, color = MaterialTheme.colorScheme.error)
                                 Button(onClick = { tileError = null; loadedDimensions = null; retry++; vm.retryDetail() },
                                     modifier = Modifier.heightIn(min = 48.dp).testTag("retry-original")) { Text("重试原图") }
-                            }
-                        }
-                    } else if (original == null || loadedDimensions == null) {
-                        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)) {
-                            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                CircularProgressIndicator(Modifier.size(30.dp))
-                                Text(state.detailStage.ifBlank { if (original == null) "正在获取原图…" else "正在准备原图本地分块…" },
-                                    modifier = Modifier.testTag("detail-stage"))
-                                Text("显示完整原图，按需加载本地分块", style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -169,7 +159,7 @@ private fun OriginalImage(file: File, onLoaded: (String) -> Unit, onError: (Stri
                 setPanEnabled(true)
                 setZoomEnabled(true)
                 setOnImageEventListener(object : SubsamplingScaleImageView.DefaultOnImageEventListener() {
-                    override fun onReady() { currentLoaded("${sWidth} × ${sHeight}") }
+                    override fun onImageLoaded() { currentLoaded("${sWidth} × ${sHeight}") }
                     override fun onImageLoadError(e: Exception) { currentError(e.message ?: "原图解码失败") }
                     override fun onTileLoadError(e: Exception) { currentError(e.message ?: "图像分块解码失败") }
                 })

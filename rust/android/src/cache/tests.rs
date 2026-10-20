@@ -113,6 +113,7 @@ fn different_urls_download_independently_without_global_network_mutex() {
         }
         let n = sockets.len();
         for mut s in sockets {
+            s.set_nonblocking(false).unwrap();
             s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") {

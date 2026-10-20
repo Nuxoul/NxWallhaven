@@ -30,6 +30,11 @@ Thumbs.db
 *.db-wal
 *.sqlite
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite-wal
+*.sqlite-shm
+**/local-data/
 
 # Credentials, signing keys and local environment files
 .env

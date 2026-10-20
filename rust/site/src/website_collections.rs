@@ -6,7 +6,18 @@ use wh_core::{Collection, CollectionsResponse, SearchResponse, Wallpaper};
 
 impl super::website::SiteClient {
     pub fn read_collections(&self, owner: &str) -> Result<CollectionsResponse, String> {
-        self.verify_owner(owner).map_err(|e| e.to_string())?;
+        wh_core::validate_username(owner)?;
+        Ok(self.collect_snapshot(Some(owner))?.1)
+    }
+    pub fn collection_snapshot(&self) -> Result<serde_json::Value, String> {
+        let (owner, response) = self.collect_snapshot(None)?;
+        Ok(serde_json::json!({"owner":owner,"data":response.data}))
+    }
+    fn collect_snapshot(
+        &self,
+        expected: Option<&str>,
+    ) -> Result<(String, CollectionsResponse), String> {
+        let mut owner = expected.map(str::to_owned);
         let mut path = "/favorites".to_string();
         let mut pages = std::collections::HashSet::new();
         let mut merged = std::collections::BTreeMap::new();
@@ -14,7 +25,12 @@ impl super::website::SiteClient {
             if pages.len() >= 100 || !pages.insert(path.clone()) {
                 return Err("收藏夹列表分页异常，未将部分列表冒充完整结果".into());
             }
-            let html = self.read_html(&path).map_err(|e| e.to_string())?;
+            let (observed, html) = self
+                .read_authenticated_html(&path, owner.as_deref())
+                .map_err(|e| e.to_string())?;
+            if owner.is_none() {
+                owner = Some(observed);
+            }
             let response = parse_own_collections(&html)?;
             for collection in response.data {
                 if let Some(id) = collection.id {
@@ -26,9 +42,12 @@ impl super::website::SiteClient {
                 None => break,
             }
         }
-        Ok(CollectionsResponse {
-            data: merged.into_values().collect(),
-        })
+        Ok((
+            owner.ok_or("网站账号未确认")?,
+            CollectionsResponse {
+                data: merged.into_values().collect(),
+            },
+        ))
     }
     /// Caller controls NSFW policy; the mobile bridge requires both explicit
     /// consent and a currently present key before passing a third purity bit.
@@ -43,9 +62,11 @@ impl super::website::SiteClient {
         if id == 0 || page == 0 || !valid_purity(purity) {
             return Err("收藏分页参数无效".into());
         }
-        self.verify_owner(owner).map_err(|e| e.to_string())?;
-        let html = self
-            .read_html(&format!("/favorites/{id}?page={page}&purity={purity}"))
+        let (_, html) = self
+            .read_authenticated_html(
+                &format!("/favorites/{id}?page={page}&purity={purity}"),
+                Some(owner),
+            )
             .map_err(|e| e.to_string())?;
         parse_wallpapers(&html, purity, page)
     }

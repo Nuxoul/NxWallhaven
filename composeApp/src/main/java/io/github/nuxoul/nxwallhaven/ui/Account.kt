@@ -402,6 +402,10 @@ private fun AccountFavoriteSheet(account: AccountController, state: AccountState
                 else -> "网站已确认：未收藏"
             })
             if (state.favoriteBusy) CircularProgressIndicator(Modifier.size(28.dp))
+            if (!state.favorite.known && state.collectionsLoaded) {
+                Text("已知收藏夹（仅供参考，正在读取网站可用位置）", style = MaterialTheme.typography.titleSmall)
+                state.collections.forEach { Text(it.label, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
             state.favoriteError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (!state.favorite.known && !state.favoriteBusy) {
                 Text("请刷新核对后再操作。结果未知时不要重复提交；本应用不会自动重试写操作。",
@@ -430,7 +434,7 @@ private fun AccountFavoriteSheet(account: AccountController, state: AccountState
                 OutlinedButton(onClick = { removeOpen = true }, enabled = !locked,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("favorite-apply")) { Text("取消收藏…") }
             }
-            OutlinedButton(onClick = { id?.let { account.favorite(it) } }, enabled = !locked && id != null,
+            OutlinedButton(onClick = { id?.let { account.favorite(it, forceRefresh = true) } }, enabled = !locked && id != null,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("favorite-refresh")) { Text("刷新核对收藏状态") }
             TextButton(onClick = { account.dismissFavorite() }, enabled = !state.favoriteBusy,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("关闭") }

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-wh-core = { path = "../core" }
+wh-core = { path = "../core", features = ["library"] }
 slint = { version = "1.18", features = ["raw-window-handle-06"] }
 raw-window-handle = "0.6"
 image = "0.25"

@@ -37,7 +37,16 @@ struct Flight {
 }
 struct FlightState {
     progress: Option<(u64, Option<u64>)>,
-    result: Option<Result<CachedData, String>>,
+    result: Option<Result<Option<CachedData>, String>>,
+    legacy_waiters: usize,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ResumeInfo {
+    length: u64,
+    total: Option<u64>,
+    sha256: String,
+    validator_header: String,
+    validator: String,
 }
 pub(super) struct DiskCache {
     root: Result<PathBuf, String>,
@@ -45,6 +54,11 @@ pub(super) struct DiskCache {
     temporary: bool,
 }
 struct PartialFile(PathBuf);
+impl PartialFile {
+    fn keep(mut self) {
+        self.0.clear();
+    }
+}
 impl Drop for PartialFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
@@ -154,7 +168,8 @@ impl DiskCache {
     pub(super) fn clear(&self) -> Result<u64, String> {
         let mut state = self.state.lock().unwrap();
         state.epoch = state.epoch.wrapping_add(1);
-        state.flights.clear();
+        // Keep live flights attached: clearing is not transport cancellation, and
+        // a second writer must not reuse an active partial's name after unlink.
         let Some(root) = self.directory(false)? else {
             return Ok(0);
         };
@@ -222,20 +237,56 @@ impl DiskCache {
         max: Option<u64>,
         progress: F,
     ) -> Result<CachedData, String> {
+        // A managed leader may have paused just before this preview joined it.
+        loop {
+            if let Some(data) = self.acquire(http, url, max, false, &mut |n, t| {
+                progress(n, t);
+                true
+            })? {
+                return Ok(data);
+            }
+        }
+    }
+    pub(super) fn load_controlled<F: FnMut(u64, Option<u64>) -> bool>(
+        &self,
+        http: &reqwest::blocking::Client,
+        url: &str,
+        mut progress: F,
+    ) -> Result<Option<CachedData>, String> {
+        self.acquire(http, url, None, true, &mut progress)
+    }
+    fn acquire(
+        &self,
+        http: &reqwest::blocking::Client,
+        url: &str,
+        max: Option<u64>,
+        controlled: bool,
+        progress: &mut dyn FnMut(u64, Option<u64>) -> bool,
+    ) -> Result<Option<CachedData>, String> {
         let key = cache_key(url)?;
+        if controlled && !progress(0, None) {
+            return Ok(None);
+        }
         let (epoch, flight, leader) = {
             let mut state = self.state.lock().unwrap();
             if let Some(data) = self.read_entry(&key)? {
                 check_size(data.bytes.len() as u64, max)?;
-                return Ok(data);
+                drop(state);
+                return Ok((!controlled
+                    || progress(data.bytes.len() as u64, Some(data.bytes.len() as u64)))
+                .then_some(data));
             }
             if let Some(flight) = state.flights.get(&key) {
+                if !controlled {
+                    flight.state.lock().unwrap().legacy_waiters += 1;
+                }
                 (state.epoch, flight.clone(), false)
             } else {
                 let flight = Arc::new(Flight {
                     state: Mutex::new(FlightState {
                         progress: None,
                         result: None,
+                        legacy_waiters: usize::from(!controlled),
                     }),
                     changed: Condvar::new(),
                 });
@@ -248,91 +299,253 @@ impl DiskCache {
             loop {
                 let (stage, result) = {
                     let state = flight.state.lock().unwrap();
-                    let state = flight
+                    let (state, _) = flight
                         .changed
-                        .wait_while(state, |s| s.progress == last && s.result.is_none())
+                        .wait_timeout_while(state, Duration::from_millis(100), |s| {
+                            s.progress == last && s.result.is_none()
+                        })
                         .unwrap();
                     (state.progress, state.result.clone())
                 };
-                if stage != last {
-                    if let Some((done, total)) = stage {
-                        progress(done, total);
+                if controlled || stage != last {
+                    let (n, t) = stage.unwrap_or((0, None));
+                    if !progress(n, t) {
+                        return Ok(None); // Never cancel a preview's transport.
                     }
                     last = stage;
                 }
                 if let Some(result) = result {
                     let data = result?;
-                    check_size(data.bytes.len() as u64, max)?;
+                    if let Some(ref data) = data {
+                        check_size(data.bytes.len() as u64, max)?;
+                    }
                     return Ok(data);
                 }
             }
         }
-        let result = self.fetch(http, url, &key, epoch, max, |done, total| {
-            flight.state.lock().unwrap().progress = Some((done, total));
-            flight.changed.notify_all();
-            progress(done, total);
-        });
+        let mut stopped = false;
+        let mut previous = None;
+        let mut last = Instant::now();
+        let result = self.fetch(
+            http,
+            url,
+            &key,
+            epoch,
+            (max, controlled),
+            |done, total, final_chunk| {
+                let emit = previous.is_none()
+                    || final_chunk
+                    || last.elapsed() >= Duration::from_millis(100);
+                if emit {
+                    flight.state.lock().unwrap().progress = Some((done, total));
+                    flight.changed.notify_all();
+                    previous = Some((done, total));
+                    last = Instant::now();
+                }
+                if !stopped && (controlled || emit) && !progress(done, total) {
+                    stopped = true;
+                }
+                !stopped || flight.state.lock().unwrap().legacy_waiters > 0
+            },
+        );
         let mut state = self.state.lock().unwrap();
-        if state.epoch == epoch {
+        if state
+            .flights
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, &flight))
+        {
             state.flights.remove(&key);
         }
         flight.state.lock().unwrap().result = Some(result.clone());
         flight.changed.notify_all();
-        result
+        if stopped {
+            Ok(None)
+        } else {
+            result
+        }
     }
-    fn fetch<F: Fn(u64, Option<u64>)>(
+    fn fetch<F: FnMut(u64, Option<u64>, bool) -> bool>(
         &self,
         http: &reqwest::blocking::Client,
         url: &str,
         key: &str,
         epoch: u64,
-        max: Option<u64>,
-        progress: F,
-    ) -> Result<CachedData, String> {
+        limits: (Option<u64>, bool),
+        mut progress: F,
+    ) -> Result<Option<CachedData>, String> {
+        let (max, controlled) = limits;
+        use reqwest::header as h;
         let started = Instant::now();
         let root = {
             let _guard = self.state.lock().unwrap();
             self.directory(true)?.unwrap().to_owned()
         };
-        let mut response = http
-            .get(url)
-            .send()
-            .and_then(|r| r.error_for_status())
-            .map_err(|e| e.to_string())?;
-        let total = response.content_length();
-        if let Some(total) = total {
-            check_size(total, max)?;
-        }
-        let extension = extension(url);
-        let partial = PartialFile(root.join(format!(
-            "{key}.{}.{}.part",
-            std::process::id(),
-            SERIAL.fetch_add(1, Ordering::Relaxed)
-        )));
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&partial.0)
-            .map_err(|e| e.to_string())?;
-        let mut buffer = [0u8; 65536];
-        let mut done = 0u64;
-        let mut last = Instant::now();
+        let partial = PartialFile(root.join(format!("{key}.resume.part")));
+        let resume_path = root.join(format!("{key}.resume.json"));
         let mut hash = Sha256::new();
-        progress(0, total);
+        let mut done = 0u64;
+        let saved = read_resume(&partial.0, &resume_path);
+        let mut resume = saved.filter(|info| {
+            let Ok(mut f) = std::fs::File::open(&partial.0) else {
+                return false;
+            };
+            let mut buf = [0u8; 65536];
+            let mut prefix = (&mut f).take(info.length);
+            while let Ok(n) = prefix.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                hash.update(&buf[..n]);
+                done += n as u64;
+            }
+            done == info.length && format!("{:x}", hash.clone().finalize()) == info.sha256
+        });
+        if resume.is_none() {
+            done = 0;
+            hash = Sha256::new();
+            remove_regular(&partial.0)?;
+            remove_regular(&resume_path)?;
+        }
+        let mut request = http.get(url).header(h::ACCEPT_ENCODING, "identity");
+        if let Some(info) = &resume {
+            request = request
+                .header(h::RANGE, format!("bytes={done}-"))
+                .header(h::IF_RANGE, &info.validator);
+        }
+        let mut response = match request.send() {
+            Ok(response) => response,
+            Err(e) => {
+                if controlled && resume.is_some() {
+                    partial.keep();
+                }
+                return Err(e.to_string());
+            }
+        };
+        if response.url().as_str() != url
+            || response
+                .headers()
+                .get(h::CONTENT_ENCODING)
+                .is_some_and(|v| v != "identity")
+        {
+            return Err("不支持重定向或编码后的原图响应".into());
+        }
+        let total;
+        if let (206, Some(info)) = (response.status().as_u16(), resume.as_ref()) {
+            let range = response
+                .headers()
+                .get(h::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(content_range)
+                .ok_or("续传 Content-Range 无效")?;
+            if range.0 != done
+                || range.1.checked_add(1) != Some(range.2)
+                || info.total.is_some_and(|n| n != range.2)
+                || response
+                    .headers()
+                    .get(info.validator_header.as_str())
+                    .and_then(|v| v.to_str().ok())
+                    != Some(info.validator.as_str())
+                || response
+                    .content_length()
+                    .is_some_and(|n| n != range.2 - done)
+            {
+                remove_regular(&resume_path)?;
+                return Err("续传验证失败，未合并原图".into());
+            }
+            total = Some(range.2);
+        } else if response.status().as_u16() == 200
+            && !response.headers().contains_key(h::CONTENT_RANGE)
+        {
+            // Ignored Range / changed validator: restart from zero, never append a 200.
+            done = 0;
+            hash = Sha256::new();
+            remove_regular(&partial.0)?;
+            remove_regular(&resume_path)?;
+            total = response.content_length();
+            resume = response
+                .headers()
+                .get(h::ETAG)
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| strong_etag(s))
+                .map(|s| ("etag", s))
+                .or_else(|| {
+                    response
+                        .headers()
+                        .get(h::LAST_MODIFIED)
+                        .and_then(|v| v.to_str().ok())
+                        .filter(|s| http_date(s))
+                        .map(|s| ("last-modified", s))
+                })
+                .map(|(header, value)| ResumeInfo {
+                    length: 0,
+                    total,
+                    sha256: String::new(),
+                    validator_header: header.into(),
+                    validator: value.into(),
+                });
+        } else {
+            return Err(format!("原图 HTTP 响应无效：{}", response.status()));
+        }
+        if let Some(n) = total {
+            check_size(n, max)?;
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        let mut file = if done > 0 {
+            let f = options.open(&partial.0).map_err(|e| e.to_string())?;
+            f.set_len(done).map_err(|e| e.to_string())?;
+            f
+        } else {
+            options
+                .create_new(true)
+                .open(&partial.0)
+                .map_err(|e| e.to_string())?
+        };
+        file.seek(SeekFrom::Start(done))
+            .map_err(|e| e.to_string())?;
+        let mut checkpoint = Instant::now();
+        let mut buffer = [0u8; 65536];
         loop {
-            let count = response.read(&mut buffer).map_err(|e| e.to_string())?;
+            if !progress(done, total, false) {
+                // All advertised bytes already arrived: finish cache validation,
+                // but the stopped observer still receives no export permission.
+                if total == Some(done) && done > 0 {
+                    break;
+                }
+                if let Some(ref mut info) = resume {
+                    self.checkpoint(epoch, &file, &resume_path, info, done, &hash)?;
+                    partial.keep();
+                }
+                return Ok(None);
+            }
+            let count = match response.read(&mut buffer) {
+                Ok(n) => n,
+                Err(e) => {
+                    if controlled {
+                        if let Some(ref mut info) = resume {
+                            self.checkpoint(epoch, &file, &resume_path, info, done, &hash)?;
+                            partial.keep();
+                        }
+                    }
+                    return Err(e.to_string());
+                }
+            };
             if count == 0 {
                 break;
             }
             done += count as u64;
             check_size(done, max)?;
+            if total.is_some_and(|n| done > n) {
+                return Err("原图响应长度无效".into());
+            }
             file.write_all(&buffer[..count])
                 .map_err(|e| e.to_string())?;
             hash.update(&buffer[..count]);
-            if last.elapsed() >= Duration::from_millis(100) {
-                progress(done, total);
-                last = Instant::now();
+            if controlled && checkpoint.elapsed() >= Duration::from_secs(1) {
+                if let Some(ref mut info) = resume {
+                    self.checkpoint(epoch, &file, &resume_path, info, done, &hash)?;
+                }
+                checkpoint = Instant::now();
             }
         }
         if done == 0 || total.is_some_and(|total| total != done) {
@@ -346,11 +559,12 @@ impl DiskCache {
             return Err("图片缓存长度校验失败".into());
         }
         drop(file);
+        let extension = extension(url);
         let info = EntryInfo {
             version: 1,
             length: done,
             sha256: format!("{:x}", hash.finalize()),
-            extension: extension.to_owned(),
+            extension: extension.into(),
         };
         let guard = self.state.lock().unwrap();
         if guard.epoch == epoch {
@@ -364,30 +578,67 @@ impl DiskCache {
                 serde_json::to_vec(&info).map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?;
-            // Cache keys are internal hashes. Replace only our own validated regular files.
             for path in [
                 root.join(format!("{key}.{extension}")),
                 root.join(format!("{key}.json")),
             ] {
-                if let Ok(meta) = std::fs::symlink_metadata(&path) {
-                    if !meta.is_file() || is_link(&meta) {
-                        return Err("图片缓存目标不是普通文件".into());
-                    }
-                    std::fs::remove_file(path).map_err(|e| e.to_string())?;
-                }
+                remove_regular(&path)?;
             }
             std::fs::rename(&partial.0, root.join(format!("{key}.{extension}")))
                 .map_err(|e| e.to_string())?;
             std::fs::rename(&info_partial.0, root.join(format!("{key}.json")))
                 .map_err(|e| e.to_string())?;
+            remove_regular(&resume_path)?;
         }
         drop(guard);
-        progress(done, total);
-        Ok(CachedData {
+        progress(done, total, true);
+        Ok(Some(CachedData {
             bytes: Arc::new(bytes),
             disk_hit: false,
             network_ms: started.elapsed().as_millis() as u64,
-        })
+        }))
+    }
+    fn checkpoint(
+        &self,
+        epoch: u64,
+        file: &std::fs::File,
+        path: &Path,
+        info: &mut ResumeInfo,
+        done: u64,
+        hash: &Sha256,
+    ) -> Result<(), String> {
+        let guard = self.state.lock().unwrap();
+        if guard.epoch != epoch {
+            return Ok(());
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
+        info.length = done;
+        info.sha256 = format!("{:x}", hash.clone().finalize());
+        let temp = PartialFile(path.with_extension(format!(
+            "{}.{}.part",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::write(
+            &temp.0,
+            serde_json::to_vec(info).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        // A crash between remove and rename only loses resumability, never validates bad bytes.
+        remove_regular(path)?;
+        std::fs::rename(&temp.0, path).map_err(|e| e.to_string())
+    }
+    pub(super) fn discard_partial(&self, url: &str) -> Result<(), String> {
+        let key = cache_key(url)?;
+        let state = self.state.lock().unwrap();
+        if state.flights.contains_key(&key) {
+            return Ok(());
+        }
+        if let Some(root) = self.directory(false)? {
+            remove_regular(&root.join(format!("{key}.resume.part")))?;
+            remove_regular(&root.join(format!("{key}.resume.json")))?;
+        }
+        Ok(())
     }
     pub(super) fn discard(&self, url: &str) -> Result<(), String> {
         let key = cache_key(url)?;
@@ -416,6 +667,111 @@ impl Drop for DiskCache {
             }
         }
     }
+}
+fn remove_regular(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() && !is_link(&meta) => {
+            std::fs::remove_file(path).map_err(|e| e.to_string())
+        }
+        Ok(_) => Err("缓存目标不是普通文件".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+fn strong_etag(s: &str) -> bool {
+    s.len() >= 2
+        && s.starts_with('"')
+        && s.ends_with('"')
+        && s[1..s.len() - 1]
+            .bytes()
+            .all(|b| b >= 0x21 && b != b'"' && b != 0x7f)
+}
+fn http_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 29
+        && &b[3..5] == b", "
+        && b[7] == b' '
+        && b[11] == b' '
+        && b[16] == b' '
+        && b[19] == b':'
+        && b[22] == b':'
+        && &b[25..] == b" GMT"
+        && [5, 6, 12, 13, 14, 15, 17, 18, 20, 21, 23, 24]
+            .iter()
+            .all(|&i| b[i].is_ascii_digit())
+        && [b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat", b"Sun"]
+            .iter()
+            .any(|day| day.as_slice() == &b[..3])
+        && [
+            b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov",
+            b"Dec",
+        ]
+        .iter()
+        .any(|month| month.as_slice() == &b[8..11])
+        && valid_date_fields(b)
+}
+fn valid_date_fields(b: &[u8]) -> bool {
+    let number = |start: usize, end: usize| {
+        std::str::from_utf8(&b[start..end])
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+    };
+    let (Some(day), Some(year), Some(hour), Some(minute), Some(second)) = (
+        number(5, 7),
+        number(12, 16),
+        number(17, 19),
+        number(20, 22),
+        number(23, 25),
+    ) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match &b[8..11] {
+        b"Feb" => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        b"Apr" | b"Jun" | b"Sep" | b"Nov" => 30,
+        _ => 31,
+    };
+    year >= 1601 && day > 0 && day <= days && hour < 24 && minute < 60 && second < 60
+}
+fn content_range(s: &str) -> Option<(u64, u64, u64)> {
+    let (span, total) = s.strip_prefix("bytes ")?.split_once('/')?;
+    let (first, last) = span.split_once('-')?;
+    if [first, last, total]
+        .iter()
+        .any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    let (first, last, total) = (first.parse().ok()?, last.parse().ok()?, total.parse().ok()?);
+    (first <= last && last < total).then_some((first, last, total))
+}
+fn read_resume(part: &Path, info_path: &Path) -> Option<ResumeInfo> {
+    let meta = std::fs::symlink_metadata(info_path).ok()?;
+    if !meta.is_file() || is_link(&meta) || meta.len() > 2048 {
+        return None;
+    }
+    let info: ResumeInfo = serde_json::from_slice(&std::fs::read(info_path).ok()?).ok()?;
+    let meta = std::fs::symlink_metadata(part).ok()?;
+    if !meta.is_file()
+        || is_link(&meta)
+        || info.length == 0
+        || meta.len() < info.length
+        || info.total.is_some_and(|n| info.length >= n)
+        || !match info.validator_header.as_str() {
+            "etag" => strong_etag(&info.validator),
+            "last-modified" => http_date(&info.validator),
+            _ => false,
+        }
+    {
+        return None;
+    }
+    Some(info)
 }
 fn check_size(bytes: u64, max: Option<u64>) -> Result<(), String> {
     if max.is_some_and(|max| bytes > max) {
@@ -465,6 +821,7 @@ fn owned_name(name: &str) -> bool {
     key.len() == 64
         && key.bytes().all(|b| b.is_ascii_hexdigit())
         && (suffix == "json"
+            || suffix == "resume.json"
             || valid_extension(suffix)
             || (suffix.ends_with(".part")
                 && suffix
@@ -779,3 +1136,5 @@ mod tests {
         assert_eq!(cache.usage().unwrap().bytes, 0);
     }
 }
+#[cfg(test)]
+mod resume_tests;

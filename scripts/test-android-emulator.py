@@ -111,6 +111,10 @@ def main():
                 return
             if not args.site_only and not args.downloads_only:
                 instrument('io.github.nuxoul.nxwallhaven.AndroidAcceptanceTest', 'acceptance', 'OK (4 tests)')
+                instrument('io.github.nuxoul.nxwallhaven.RestorationAndKeyTest', 'restoration-key', 'OK (4 tests)')
+                instrument('io.github.nuxoul.nxwallhaven.MobileBrowsingExperienceTest', 'mobile-browsing', 'OK (2 tests)')
+            if not args.downloads_only:
+                instrument('io.github.nuxoul.nxwallhaven.AccountRequestCountTest', 'account-request-count', 'OK (1 test)')
             if not args.site_only:
                 instrument('io.github.nuxoul.nxwallhaven.DownloadLibraryTest', 'download-library', 'OK (4 tests)')
                 instrument('io.github.nuxoul.nxwallhaven.DownloadRestartProbe#prepare', 'download-restart-prepare', 'OK (1 test)')

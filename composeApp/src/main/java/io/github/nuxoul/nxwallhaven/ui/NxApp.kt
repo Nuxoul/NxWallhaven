@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.nuxoul.nxwallhaven.NxViewModel
 import java.util.Locale
@@ -52,10 +54,14 @@ fun NxApp(vm: NxViewModel) {
     val dark = when (state.prefs.theme) { 1 -> true; 2 -> false; else -> isSystemInDarkTheme() }
     MaterialTheme(colorScheme = if (dark) NightColors else DayColors) {
         val snackbar = remember { SnackbarHostState() }
+        val browsePosition=remember(vm) { vm.consumeGridRestoration(false) }
+        val profilePosition=remember(vm) { vm.consumeGridRestoration(true) }
         val browseGrid = rememberLazyStaggeredGridState()
         val profileGrid = rememberLazyStaggeredGridState()
+        PersistGrid(vm,browseGrid,false,browsePosition,state.walls.size,state.generation)
+        PersistGrid(vm,profileGrid,true,profilePosition,state.profileWalls.size,state.profileGeneration)
         val accountGrid = rememberLazyStaggeredGridState()
-        var underlyingRoute by rememberSaveable { mutableStateOf("browse") }
+        var underlyingRoute by rememberSaveable { mutableStateOf(vm.detailBaseRoute()) }
         // A detail is an overlay, not a replacement: its source grid stays composed.
         SideEffect { if (state.route != "detail") underlyingRoute = state.route }
         val baseRoute = if (state.route == "detail") underlyingRoute else state.route
@@ -77,6 +83,24 @@ fun NxApp(vm: NxViewModel) {
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
             }
         }
+    }
+}
+
+/** Restore only loaded data. Never fetch every intervening page to chase a stale scroll index. */
+@Composable
+private fun PersistGrid(vm:NxViewModel,grid:LazyStaggeredGridState,profile:Boolean,position:Pair<Int,Int>?,size:Int,generation:Long) {
+    var restored by remember { mutableStateOf(position==null) }
+    LaunchedEffect(size>0) {
+        if(size>0 && !restored) {
+            // Gallery applies its new-generation reset first.
+            withFrameNanos { };withFrameNanos { }
+            if(position!=null && position.first<size)grid.scrollToItem(position.first,position.second)
+            restored=true
+        }
+    }
+    LaunchedEffect(grid,restored,generation,size>0) {
+        if(restored && size>0)snapshotFlow { grid.firstVisibleItemIndex to grid.firstVisibleItemScrollOffset }
+            .distinctUntilChanged().collect { vm.saveGridPosition(profile,it.first,it.second) }
     }
 }
 

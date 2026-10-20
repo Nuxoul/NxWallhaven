@@ -28,6 +28,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import io.github.nuxoul.nxwallhaven.NxViewModel
 import io.github.nuxoul.nxwallhaven.shared.Wall
+import io.github.nuxoul.nxwallhaven.shared.GalleryPrefetch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -111,8 +114,19 @@ internal fun Gallery(
     }
     LaunchedEffect(gridState, walls.size, loading, exhausted, error, active) {
         if (active && walls.isNotEmpty() && !loading && !exhausted && error == null) {
-            snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
-                .filter { it >= walls.size - 7 }.take(1).collect { onMore() }
+            snapshotFlow {
+                val visible=gridState.layoutInfo.visibleItemsInfo.filter{it.index<walls.size}
+                GalleryPrefetch.shouldLoad(walls.size,visible.maxOfOrNull{it.index}?:-1,visible.size)
+            }.filter { it }.take(1).collect { onMore() }
+        }
+    }
+    LaunchedEffect(gridState,walls,generation,active) {
+        if(active && walls.isNotEmpty())snapshotFlow {
+            val visible=gridState.layoutInfo.visibleItemsInfo.filter{it.index<walls.size}
+            val first=visible.minOfOrNull{it.index}?:0
+            first to GalleryPrefetch.thumbnailEnd(walls.size,visible.maxOfOrNull{it.index}?:-1,visible.size)
+        }.distinctUntilChanged().collectLatest { (first,end) ->
+            if(end>first)vm.prefetchThumbnails(walls.subList(first,end).take(72))
         }
     }
     PullToRefreshBox(isRefreshing = loading && walls.isEmpty(), onRefresh = onRefresh, modifier = modifier) {

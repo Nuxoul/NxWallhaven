@@ -6,17 +6,17 @@ wallhaven.cc 的 Windows + Android 第三方客户端，目标包含本地数据
 
 已确认采用方案 B：
 
-- **Windows：Rust + Slint**，实现位于 `rust/desktop`。
-- **共享核心：Rust**，API、模型、限流与布局位于 `rust/core`；网站表单/收藏逻辑位于 `rust/site`，Android UniFFI与文件缓存位于 `rust/android`；下载/图库 SQLite 模式位于共享核心的可选 `library` 模块。
-- **Android：Kotlin + Compose / Material 3**，当前 `0.1.0-alpha04`，原生浏览、完整原图、作者、缓存、网站账号收藏、后台下载和离线图库已实现；本轮修复登录核对被网页慢资源阻塞，以及缓存原图校验拖住其他图片的问题。
+- **Windows：Rust + Slint**，新增持久下载队列、原生本地管理、目录导入预览、精确内容查重报告和标签规范化，位于 `rust/desktop`。
+- **共享核心：Rust**，API/模型/限流/布局及 SQLite 下载/图库/导入整理模式位于 `rust/core`；网站表单逻辑位于 `rust/site`，Android UniFFI及文件缓存位于 `rust/android`。
+- **Android：Kotlin + Compose / Material 3**，当前 `0.1.0-alpha05`；首屏后按序准备3页列表、提前缓存数屏缩略图，详情先显示缩略预览与原图字节进度，收藏同页身份核对/短时状态复用；补充安全页面恢复和 API Key 显式验证。
 
-桌面和手机均不是全部需求已完成。Android 已验证本地网站会话、原生收藏确认、后台下载、离线图库与跨进程恢复；真实网站账号写入、物理设备/OEM后台策略、生产签名等仍需验收。详见最新记录。
+桌面和手机均不是全部长期需求已完成。当前已验证双端队列/图库与安全缓存、桌面导入整理，以及手机浏览/预览/收藏请求计数；真实手机/账号、深页精确恢复、增量元数据整理、壁纸裁切与生产签名等仍有缺项。见最新记录的完成范围和边界。
 
 ## 构建与运行
 
 ```powershell
 cd D:\Code\wallhaven\rust
-cargo test --workspace
+cargo test --workspace -- --test-threads=1
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --release -p wh-desktop
 .\target\release\wh-desktop.exe
@@ -35,13 +35,13 @@ cd D:\Code\wallhaven
 .\scripts\build-android.ps1 -Tests
 ```
 
-需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；当前修复与实测见 [第28篇](docs/28-Android登录确认与图片加载阻塞修复.md)，下载/图库见 [第27篇](docs/27-Android后台下载与本地图库.md)。
+需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；当前双端功能与验收见 [第29篇](docs/29-剩余功能首轮完善与手机浏览收藏提速.md)。
 
-测试包：`dist\android\NxWallhaven-0.1.0-alpha04-debug.apk`，Android8+，ARM64/x86_64，调试签名与alpha01–03一致，可直接覆盖升级，不要先卸载/清数据。alpha04修复主文档已就绪却等待网页全部图片才核对登录的故障，以及缓存大原图校验阻塞其他图片请求的锁竞争；保留完整原图与原始字节缓存。实际手机登录仍需本人复测，冷加载网络耗时尚不能仅用同一Wi-Fi解释；详见计时与未验收范围。
+测试包：`dist\android\NxWallhaven-0.1.0-alpha05-debug.apk`，Android8+，ARM64/x86_64，与alpha01–04同调试签名，可直接覆盖升级，不要卸载清数据。列表按序补到通常72条后继续提前续载，缩略图最多4并发预取；原图未就绪时显示已有缩略图和底部实际进度。收藏夹刷新复用同页身份、同图短时重开复用状态，写入仍重新取新鲜表单并核对账号；不是跳过安全校验。
 
 ## 最新修复与验收
 
-最新修复见 [Android alpha04：登录确认与图片加载阻塞](docs/28-Android登录确认与图片加载阻塞修复.md)，下载/图库见 [Android alpha03](docs/27-Android后台下载与本地图库.md)，账号版见 [Android alpha02](docs/26-Android账号登录与原生收藏.md)；桌面最新修复见 [窗口缩放固定分行与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)。
+最新交付见 [Windows本地管理 + Android alpha05浏览/预览/收藏提速](docs/29-剩余功能首轮完善与手机浏览收藏提速.md)，此前登录等待/缓存锁修复见 [alpha04](docs/28-Android登录确认与图片加载阻塞修复.md)，手机下载/图库见 [alpha03](docs/27-Android后台下载与本地图库.md)。
 
 - 兼容认证响应中的数字字符串，例如 `per_page: "24"`。
 - 设置改为独立窗口，不缩小主窗口。
@@ -86,6 +86,7 @@ cd D:\Code\wallhaven
 - [Android alpha02：网页登录、私有收藏、写入确认与跨进程会话验收](docs/26-Android账号登录与原生收藏.md)
 - [Android alpha03：持久队列、校验续传、离线图库及文件发布恢复](docs/27-Android后台下载与本地图库.md)
 - [Android alpha04：登录等待复现/修复、缓存锁竞争及真实网络分段计时](docs/28-Android登录确认与图片加载阻塞修复.md)
+- [首轮完善：桌面持久队列/导入整理、手机预加载/详情预览/收藏请求复用与验收](docs/29-剩余功能首轮完善与手机浏览收藏提速.md)
 
 较早的选型/完成报告可能包含已废弃结论，以当前代码和最新验收记录为准。
 

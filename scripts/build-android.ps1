@@ -38,7 +38,7 @@ try {
         if ($LASTEXITCODE -ne 0) {throw 'Android build/check failed'}
         $out=Join-Path $root 'dist\android'
         New-Item -ItemType Directory -Force $out | Out-Null
-        $apk=Join-Path $out 'NxWallhaven-0.1.0-alpha04-debug.apk'
+        $apk=Join-Path $out 'NxWallhaven-0.1.0-alpha05-debug.apk'
         Copy-Item -LiteralPath (Join-Path $root 'composeApp\build\outputs\apk\debug\composeApp-debug.apk') -Destination $apk -Force -ErrorAction Stop
         $source=Join-Path $root 'composeApp\build\outputs\apk\debug\composeApp-debug.apk'
         if ((Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $apk).Hash) {

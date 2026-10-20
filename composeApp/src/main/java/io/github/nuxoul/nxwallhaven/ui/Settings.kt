@@ -53,7 +53,7 @@ internal fun SettingsScreen(vm: NxViewModel) {
                     Text("浏览 SFW 内容无需密钥。输入框留空可保留已保存的密钥。",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     OutlinedTextField(
-                        value = keyInput, onValueChange = { keyInput = it.trim() }, singleLine = true,
+                        value = keyInput, onValueChange = { keyInput = it.trim(); vm.keyInputChanged() }, singleLine = true,
                         label = { Text(if (state.prefs.hasKey) "更换 API 密钥" else "Wallhaven API 密钥") },
                         placeholder = { Text("留空以保留已保存的密钥") },
                         visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
@@ -62,6 +62,13 @@ internal fun SettingsScreen(vm: NxViewModel) {
                             if (showKey) "隐藏 API 密钥" else "显示 API 密钥", { showKey = !showKey }) },
                         modifier = Modifier.fillMaxWidth().testTag("api-key")
                     )
+                    OutlinedButton(onClick = { vm.verifyKey(keyInput) }, enabled = !state.keyChecking && (keyInput.isNotBlank() || state.prefs.hasKey),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("verify-api-key")) {
+                        Text(if(state.keyChecking)"正在验证…" else "验证 API 密钥")
+                    }
+                    Text(state.keyStatus,modifier=Modifier.testTag("api-key-status"),style=MaterialTheme.typography.bodySmall)
+                    Text("只读请求 API /settings，不修改账户。API 密钥验证不是网站登录，也不验证 Cookie。",
+                        style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     if (state.prefs.hasKey) TextButton(onClick = { confirmDelete = true },
                         modifier = Modifier.heightIn(min = 48.dp).testTag("delete-key")) {
                         Icon(Icons.Outlined.DeleteOutline, contentDescription = null)

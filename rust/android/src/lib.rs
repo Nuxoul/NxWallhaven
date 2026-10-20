@@ -183,6 +183,12 @@ impl Query {
     }
 }
 
+/// Observation never pauses or cancels a shared preview/download acquisition.
+#[uniffi::export(with_foreign)]
+pub trait ImageObserver: Send + Sync {
+    fn progress(&self, received: u64, total: Option<u64>);
+}
+
 #[derive(uniffi::Object)]
 pub struct MobileCore {
     api: WallhavenClient,
@@ -251,6 +257,31 @@ impl MobileCore {
         api.set_api_key(key);
         json(&api.collection_wallpapers(&username, id, &purity, page)?)
     }
+    /// Read-only authenticated API validation; website login/cookies are unrelated.
+    pub fn verify_api_key(&self, key: String) -> Result<(), MobileError> {
+        let key = key_fn(Some(key))?.ok_or(MobileError::Unauthorized)?;
+        let mut api = self.api.clone();
+        api.set_api_key(Some(key));
+        api.user_settings()?;
+        Ok(())
+    }
+    pub fn acquire_image_observed(
+        &self,
+        url: String,
+        observer: Arc<dyn ImageObserver>,
+    ) -> Result<String, MobileError> {
+        let mut last = None::<std::time::Instant>;
+        self.cache.acquire_controlled(&url, &mut |received, total| {
+            let now = std::time::Instant::now();
+            if last.is_none_or(|t| now.duration_since(t).as_millis() >= 100)
+                || total == Some(received)
+            {
+                last = Some(now);
+                observer.progress(received, total);
+            }
+            cache::Control::Continue
+        })
+    }
     pub fn acquire_image(&self, url: String) -> Result<String, MobileError> {
         self.cache.acquire(&url)
     }
@@ -269,6 +300,68 @@ use username as username_fn;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Default)]
+    struct RecordingObserver(std::sync::Mutex<Vec<(u64, Option<u64>)>>);
+    impl ImageObserver for RecordingObserver {
+        fn progress(&self, received: u64, total: Option<u64>) {
+            self.0.lock().unwrap().push((received, total));
+        }
+    }
+    #[test]
+    fn observed_acquisition_reports_real_bytes_and_reuses_complete_cache() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/original.png", listener.local_addr().unwrap());
+        let body = image_format::fixture();
+        let expected = body.clone();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let request = String::from_utf8(request).unwrap().to_lowercase();
+            assert!(!request.contains("cookie:"));
+            assert!(!request.contains("x-api-key:"));
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            socket.write_all(&body).unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let core = MobileCore::new(dir.path().to_string_lossy().into()).unwrap();
+        let observer = Arc::new(RecordingObserver::default());
+        let path = core
+            .acquire_image_observed(url.clone(), observer.clone())
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        let samples = observer.0.lock().unwrap();
+        assert!(samples.contains(&(expected.len() as u64, Some(expected.len() as u64))));
+        drop(samples);
+        let cached = Arc::new(RecordingObserver::default());
+        assert_eq!(
+            core.acquire_image_observed(url, cached.clone()).unwrap(),
+            path
+        );
+        assert_eq!(
+            *cached.0.lock().unwrap(),
+            vec![(expected.len() as u64, Some(expected.len() as u64))]
+        );
+        assert!(matches!(
+            core.verify_api_key(" ".into()),
+            Err(MobileError::Unauthorized)
+        ));
+        assert!(core.verify_api_key("invalid\r\nheader".into()).is_err());
+    }
     #[test]
     fn auth_and_purity_are_explicit() {
         for p in ["", "000", "11", "1111", "10x", " 100"] {

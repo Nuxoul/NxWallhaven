@@ -106,6 +106,7 @@ pub struct ImageLoader {
 fn http_client_builder() -> reqwest::blocking::ClientBuilder {
     reqwest::blocking::Client::builder()
         .user_agent("WallHavenStudio/0.1")
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(120))
 }
@@ -114,7 +115,10 @@ impl ImageLoader {
     pub fn new(threads: usize) -> Self {
         Self::with_disk_cache(threads, crate::image_disk_cache::shared())
     }
-    fn with_disk_cache(threads: usize, disk: Arc<crate::image_disk_cache::DiskCache>) -> Self {
+    pub(super) fn with_disk_cache(
+        threads: usize,
+        disk: Arc<crate::image_disk_cache::DiskCache>,
+    ) -> Self {
         let http = http_client_builder().build().expect("HTTP client");
         let (tx, rx) = mpsc::channel::<Job>();
         let rx = Arc::new(Mutex::new(rx));
@@ -329,6 +333,75 @@ impl ImageLoader {
         let data = self.disk.load(&self.http, url, None, &progress)?;
         crate::image_disk_cache::save_copy(&data.bytes, path, progress)
     }
+    /// Controlled acquisition uses the same flights and exact original bytes as preview.
+    /// false means paused; a preview sharing the flight is never cancelled.
+    #[cfg(test)]
+    pub fn download_managed<F: FnMut(u64, Option<u64>) -> bool>(
+        &self,
+        url: &str,
+        path: &Path,
+        mut progress: F,
+    ) -> Result<bool, String> {
+        if path.exists() {
+            return Err("文件已存在，未覆盖".into());
+        }
+        let Some(data) = self.acquire_for_download(url, &mut progress)? else {
+            return Ok(false);
+        };
+        let n = data.bytes.len() as u64;
+        if !progress(n, Some(n)) {
+            return Ok(false);
+        }
+        crate::image_disk_cache::save_copy(&data.bytes, path, |_, _| {})?;
+        Ok(true)
+    }
+    pub(super) fn acquire_for_download<F: FnMut(u64, Option<u64>) -> bool>(
+        &self,
+        url: &str,
+        progress: F,
+    ) -> Result<Option<crate::image_disk_cache::CachedData>, String> {
+        validate_download_url(url)?;
+        self.disk.load_controlled(&self.http, url, progress)
+    }
+    pub(super) fn discard_download_partial(&self, url: &str) -> Result<(), String> {
+        self.disk.discard_partial(url)
+    }
+}
+/// Public original CDN only: never persist credentials or follow redirects to other hosts.
+pub(super) fn validate_download_url(url: &str) -> Result<(), String> {
+    let u = reqwest::Url::parse(url).map_err(|_| "原图地址无效")?;
+    if !u.username().is_empty()
+        || u.password().is_some()
+        || u.query().is_some()
+        || u.fragment().is_some()
+    {
+        return Err("原图地址不允许凭据或查询参数".into());
+    }
+    #[cfg(test)]
+    if u.scheme() == "http" && matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+        return Ok(());
+    }
+    let segments: Vec<_> = u.path().split('/').collect();
+    if u.scheme() != "https"
+        || u.host_str() != Some("w.wallhaven.cc")
+        || u.port().is_some()
+        || segments.len() != 4
+        || segments[1] != "full"
+        || segments[2].len() != 2
+    {
+        return Err("仅支持 Wallhaven 公共原图地址".into());
+    }
+    let (id, ext) = segments[3]
+        .strip_prefix("wallhaven-")
+        .and_then(|s| s.split_once('.'))
+        .ok_or("原图文件名无效")?;
+    if !wh_core::library::valid_id(id)
+        || &id[..2] != segments[2]
+        || !matches!(ext, "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif")
+    {
+        return Err("原图文件名无效".into());
+    }
+    Ok(())
 }
 fn decode(bytes: &[u8], edge: u32) -> Result<DecodedImage, String> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))

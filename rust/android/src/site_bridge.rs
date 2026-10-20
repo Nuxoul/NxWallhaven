@@ -56,6 +56,9 @@ impl MobileSite {
     pub fn collections(&self, owner: String) -> Result<String, MobileError> {
         json(&self.client.read_collections(&owner).map_err(safe_error)?)
     }
+    pub fn collection_snapshot(&self) -> Result<String, MobileError> {
+        json(&self.client.collection_snapshot().map_err(safe_error)?)
+    }
     pub fn collection_page(
         &self,
         owner: String,
@@ -84,6 +87,23 @@ impl MobileSite {
     }
     pub fn favorite_state(&self, id: String) -> Result<String, MobileError> {
         json(&self.client.favorite_state(&id).map_err(site_error)?)
+    }
+    pub fn favorite_snapshot(&self, id: String) -> Result<String, MobileError> {
+        json(&self.client.favorite_snapshot(&id).map_err(site_error)?)
+    }
+    pub fn set_favorite_target(
+        &self,
+        owner: String,
+        id: String,
+        desired: bool,
+        label: String,
+    ) -> Result<String, MobileError> {
+        json(
+            &self
+                .client
+                .set_favorite_target(&owner, &id, desired, &label)
+                .map_err(site_error)?,
+        )
     }
     pub fn set_favorite(
         &self,

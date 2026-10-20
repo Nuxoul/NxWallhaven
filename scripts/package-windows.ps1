@@ -5,7 +5,7 @@ $rust = Join-Path $root 'rust'
 Push-Location $rust
 try {
     if (!$SkipChecks) {
-        & cargo test --workspace
+        & cargo test --workspace -- --test-threads=1
         if ($LASTEXITCODE -ne 0) { throw 'Workspace tests failed' }
         & cargo clippy --workspace --all-targets -- -D warnings
         if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }

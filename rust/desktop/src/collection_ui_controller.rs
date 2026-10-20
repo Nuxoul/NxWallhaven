@@ -14,12 +14,16 @@ impl CollectionTools {
         ui: &AppWindow,
         settings: &SettingsWindow,
         hub: Rc<window_hub::WindowHub>,
+        local: crate::local_controller::LocalTools,
+        downloads: Arc<crate::download_manager::DownloadManager>,
     ) {
         let quick = self._quick.as_weak();
         let manager = self._manager.as_weak();
         let settings = settings.as_weak();
         ui.window().on_close_requested(move || {
             hub.close_all();
+            downloads.shutdown();
+            local.hide_all();
             if let Some(window) = quick.upgrade() {
                 let _ = window.hide();
             }

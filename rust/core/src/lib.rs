@@ -6,6 +6,8 @@
 //! 3. 布局算法与平台无关，两端复用
 
 pub mod api;
+#[cfg(feature = "library")]
+pub mod catalog;
 pub mod layout;
 #[cfg(feature = "library")]
 pub mod library;

@@ -19,6 +19,14 @@ class Repository(cacheRoot: File) {
         Wire.page(core.collectionPage(username, id.toUInt(), page.toUInt(), purity, key))
     }
     suspend fun image(url: String): File = withContext(Dispatchers.IO) { File(core.acquireImage(url)) }
+    suspend fun verifyApiKey(key:String) = withContext(Dispatchers.IO) { core.verifyApiKey(key) }
+    /** Native callbacks run on the IO caller, never the main thread. UI observes safe counters only. */
+    suspend fun imageObserved(url:String,onProgress:(TransferProgress)->Unit):File = withContext(Dispatchers.IO) {
+        val meter=TransferMeter()
+        File(core.acquireImageObserved(url,object:com.nxwallhaven.core.ImageObserver {
+            override fun progress(received:ULong,total:ULong?) { onProgress(meter.sample(received,total)) }
+        }))
+    }
     suspend fun cache(): CacheInfo = withContext(Dispatchers.IO) { Wire.cache(core.cacheUsage()) }
     suspend fun clearCache() = withContext(Dispatchers.IO) { core.clearCache() }
 }

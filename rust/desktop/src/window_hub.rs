@@ -11,6 +11,7 @@ pub(super) struct WindowHub {
     profiles: RefCell<Vec<profile_controller::ProfileTools>>,
     next: std::cell::Cell<u64>,
     timer: slint::Timer,
+    downloads: RefCell<Option<Arc<crate::download_manager::DownloadManager>>>,
 }
 struct DetailEntry {
     id: u64,
@@ -28,6 +29,7 @@ enum DetailEvent {
     Original(u64, Result<DecodedImage, String>),
     DownloadProgress(u64, Option<u64>),
     Download(Result<PathBuf, String>),
+    Queued(Result<(), String>),
     Wallpaper(Result<(), String>),
 }
 impl WindowHub {
@@ -46,6 +48,7 @@ impl WindowHub {
             profiles: RefCell::new(Vec::new()),
             next: std::cell::Cell::new(0),
             timer: slint::Timer::default(),
+            downloads: RefCell::new(None),
         });
         let weak = Rc::downgrade(&hub);
         hub.timer.start(
@@ -77,6 +80,12 @@ impl WindowHub {
             }
         });
         hub
+    }
+    pub(super) fn set_download_manager(
+        &self,
+        manager: Arc<crate::download_manager::DownloadManager>,
+    ) {
+        *self.downloads.borrow_mut() = Some(manager);
     }
     pub(super) fn close_all(&self) {
         for entry in self.details.borrow().iter() {
@@ -343,6 +352,23 @@ impl WindowHub {
     }
     fn download(&self, id: u64, set_wallpaper: bool) {
         let directory = self.main.borrow().settings.resolved_download_dir();
+        if !set_wallpaper {
+            if let Some(manager) = self.downloads.borrow().clone() {
+                let entries = self.details.borrow();
+                if let Some(entry) = entries.iter().find(|entry| entry.id == id) {
+                    let wall = entry.wall.clone();
+                    let tx = entry.tx.clone();
+                    std::thread::spawn(move || {
+                        let result = manager.enqueue(&wall, &directory);
+                        let _ = tx.send(DetailEvent::Queued(result));
+                    });
+                    entry
+                        .window
+                        .set_action_message("正在加入持久下载队列；可在下载与本地查看".into());
+                }
+                return;
+            }
+        }
         let info = {
             let entries = self.details.borrow();
             let Some(entry) = entries.iter().find(|entry| entry.id == id) else {
@@ -463,6 +489,14 @@ impl WindowHub {
                             .unwrap_or_else(|| format!("已接收 {}", fmt_size(done)))
                             .into(),
                     ),
+                    DetailEvent::Queued(result) => {
+                        entry.window.set_action_message(
+                            result
+                                .map(|_| "已加入持久队列；在下载与本地查看实际完成状态".to_owned())
+                                .unwrap_or_else(|e| format!("未能加入队列：{e}"))
+                                .into(),
+                        );
+                    }
                     DetailEvent::Download(result) => {
                         entry.window.set_downloading(false);
                         entry.window.set_action_message(

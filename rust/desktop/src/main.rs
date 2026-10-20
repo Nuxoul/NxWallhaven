@@ -11,9 +11,11 @@ mod config;
 #[cfg(test)]
 mod default_collection_regression;
 mod detail_loading;
+mod download_manager;
 mod gallery_layout;
 mod image_disk_cache;
 mod image_loader;
+mod local_controller;
 #[cfg(test)]
 mod login_regression;
 #[cfg(test)]
@@ -662,6 +664,8 @@ fn main() -> Result<(), slint::PlatformError> {
         message: "就绪".into(),
     }));
     let _cache_tools = cache_control::bind(&settings_window);
+    let local_tools = local_controller::bind(&ui, state.clone(), loader.clone())
+        .map_err(slint::PlatformError::Other)?;
     let (tx, rx) = mpsc::channel::<Event>();
     account_controller::bind(
         &ui,
@@ -685,7 +689,14 @@ fn main() -> Result<(), slint::PlatformError> {
         loader.clone(),
         _collection_tools.quick_window(),
     );
-    _collection_tools.bind_main_close(&ui, &settings_window, window_hub.clone());
+    window_hub.set_download_manager(local_tools.manager());
+    _collection_tools.bind_main_close(
+        &ui,
+        &settings_window,
+        window_hub.clone(),
+        local_tools.clone(),
+        local_tools.manager(),
+    );
     {
         let weak = ui.as_weak();
         let state = state.clone();
@@ -1295,6 +1306,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.show()?;
     window_chrome::install(ui.window());
     let result = ui.run();
+    local_tools.manager().shutdown();
     website_controller::shutdown(&state.borrow());
     result
 }

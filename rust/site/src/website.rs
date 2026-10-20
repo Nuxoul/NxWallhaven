@@ -5,7 +5,11 @@ use http::StatusCode;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fmt, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, Mutex},
+};
 use url::Url;
 
 const ORIGIN: &str = "https://wallhaven.cc";
@@ -77,13 +81,18 @@ pub struct FavoriteTarget {
     pub label: String,
 }
 
+type FavoriteChoices = BTreeMap<String, (String, Vec<String>)>;
 #[derive(Clone)]
 pub struct SiteClient {
     transport: Arc<dyn SiteTransport>,
+    choices: Arc<Mutex<FavoriteChoices>>,
 }
 impl SiteClient {
     pub fn with_transport(transport: Arc<dyn SiteTransport>) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            choices: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
     pub fn verify(&self) -> Result<String, SiteError> {
         let document = self.get_document(origin_url("/")?, false)?;
@@ -101,6 +110,25 @@ impl SiteClient {
             return Err(SiteError::UnsupportedPage);
         }
         Ok(self.get_document(origin_url(path)?, false)?.body)
+    }
+    /// Identity and content come from the same size/origin/challenge-validated response.
+    pub(super) fn read_authenticated_html(
+        &self,
+        path: &str,
+        owner: Option<&str>,
+    ) -> Result<(String, String), SiteError> {
+        if !path.starts_with('/') || path.starts_with("//") {
+            return Err(SiteError::UnsupportedPage);
+        }
+        if let Some(owner) = owner {
+            wh_core::validate_username(owner).map_err(|_| SiteError::InvalidOwner)?;
+        }
+        let document = self.get_document(origin_url(path)?, false)?;
+        let observed = parse_authenticated_user(&document.body, &document.final_url)?;
+        if owner.is_some_and(|owner| !observed.eq_ignore_ascii_case(owner)) {
+            return Err(SiteError::OwnerMismatch);
+        }
+        Ok((observed, document.body))
     }
     fn request(&self, request: Request) -> Result<Received, SiteError> {
         let url = Url::parse(&request.url).map_err(|_| SiteError::UnsupportedPage)?;
@@ -138,7 +166,39 @@ impl SiteClient {
         Ok(response.body)
     }
     pub fn favorite_state(&self, id: &str) -> Result<FavoriteState, SiteError> {
-        Ok(self.fetch_favorite_page(id, None)?.state)
+        let (owner, page) = self.fetch_owned_favorite_page(id, None)?;
+        self.remember_choices(id, &owner, &page.state);
+        Ok(page.state)
+    }
+    pub fn favorite_snapshot(&self, id: &str) -> Result<Value, SiteError> {
+        let (owner, page) = self.fetch_owned_favorite_page(id, None)?;
+        self.remember_choices(id, &owner, &page.state);
+        Ok(
+            serde_json::json!({"owner":owner,"is_favorite":page.state.is_favorite,"targets":page.state.targets}),
+        )
+    }
+    fn remember_choices(&self, id: &str, owner: &str, state: &FavoriteState) {
+        let mut choices = self.choices.lock().unwrap();
+        if choices.len() >= 32 && !choices.contains_key(id) {
+            choices.clear();
+        }
+        choices.insert(
+            id.into(),
+            (
+                owner.into(),
+                state.targets.iter().map(|t| t.label.clone()).collect(),
+            ),
+        );
+    }
+    /// The mobile caller supplies its selected label, never an index into a stale form.
+    pub fn set_favorite_target(
+        &self,
+        owner: &str,
+        id: &str,
+        desired: bool,
+        label: &str,
+    ) -> Result<FavoriteState, SiteError> {
+        self.write_favorite(owner, id, desired, Some(label), 0)
     }
     pub fn set_favorite(
         &self,
@@ -147,14 +207,62 @@ impl SiteClient {
         desired: bool,
         target_index: usize,
     ) -> Result<FavoriteState, SiteError> {
-        validate_wallpaper_id(id)?;
-        // Always authenticate freshly, even for a no-op. Also check the owner
-        // on the fresh wallpaper form, preventing a switched-session write.
-        self.verify_owner(owner)?;
+        let selected = self.choices.lock().unwrap().get(id).cloned();
+        let label = if desired {
+            match selected {
+                Some((observed, labels)) => {
+                    if !observed.eq_ignore_ascii_case(owner) {
+                        return Err(SiteError::OwnerMismatch);
+                    }
+                    Some(
+                        labels
+                            .get(target_index)
+                            .cloned()
+                            .ok_or(SiteError::InvalidTargetIndex)?,
+                    )
+                }
+                None => None, // No remembered choice is safe only for a sole fresh target.
+            }
+        } else {
+            None
+        };
+        self.write_favorite(owner, id, desired, label.as_deref(), target_index)
+    }
+    fn write_favorite(
+        &self,
+        owner: &str,
+        id: &str,
+        desired: bool,
+        label: Option<&str>,
+        target_index: usize,
+    ) -> Result<FavoriteState, SiteError> {
+        wh_core::validate_username(owner).map_err(|_| SiteError::InvalidOwner)?;
         let page = self.fetch_favorite_page(id, Some(owner))?;
         if page.state.is_favorite == desired {
             return Ok(page.state);
         }
+        let target_index = if desired {
+            if let Some(label) = label {
+                let mut indices = page
+                    .state
+                    .targets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, target)| target.label == label)
+                    .map(|(index, _)| index);
+                let index = indices.next().ok_or(SiteError::InvalidTargetIndex)?;
+                if indices.next().is_some() {
+                    return Err(SiteError::InvalidTargetIndex);
+                }
+                index
+            } else if target_index == 0 && page.state.targets.len() == 1 {
+                0
+            } else {
+                return Err(SiteError::InvalidTargetIndex);
+            }
+        } else {
+            0
+        };
         let csrf = page.csrf.ok_or(SiteError::UnsupportedPage)?;
         let action = page
             .actions
@@ -194,16 +302,23 @@ impl SiteClient {
         id: &str,
         owner: Option<&str>,
     ) -> Result<FavoritePage, SiteError> {
+        Ok(self.fetch_owned_favorite_page(id, owner)?.1)
+    }
+    fn fetch_owned_favorite_page(
+        &self,
+        id: &str,
+        owner: Option<&str>,
+    ) -> Result<(String, FavoritePage), SiteError> {
         validate_wallpaper_id(id)?;
         let document = self.get_document(origin_url(&format!("/w/{id}"))?, false)?;
-        if let Some(owner) = owner {
-            if !parse_authenticated_user(&document.body, &document.final_url)?
-                .eq_ignore_ascii_case(owner)
-            {
-                return Err(SiteError::OwnerMismatch);
-            }
+        let observed = parse_authenticated_user(&document.body, &document.final_url)?;
+        if owner.is_some_and(|owner| !observed.eq_ignore_ascii_case(owner)) {
+            return Err(SiteError::OwnerMismatch);
         }
-        parse_favorite_page(&document.body, &document.final_url, false)
+        Ok((
+            observed,
+            parse_favorite_page(&document.body, &document.final_url, false)?,
+        ))
     }
 }
 struct Received {

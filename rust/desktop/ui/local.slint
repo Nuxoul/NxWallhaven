@@ -1,0 +1,173 @@
+import { Button, LineEdit, ComboBox, CheckBox, ListView, ScrollView } from "std-widgets.slint";
+import { StudioTheme, StudioTitleBar, NavigationTab } from "design.slint";
+export struct LocalRow { key: string, title: string, subtitle: string, detail: string, state: string, progress: float, thumbnail: image, loaded: bool, selected: bool, can-open: bool, can-delete: bool }
+export component LocalWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    title: "下载与本地 - WallHaven Studio";
+    preferred-width: 1060px; preferred-height: 760px; min-width: 860px; min-height: 600px;
+    max-width: 100000px; max-height: 100000px;
+    no-frame: true; resize-border-width: root.maximized ? 0px : 6px;
+    background: StudioTheme.canvas; default-font-family: "Segoe UI"; default-font-size: 13px;
+    in-out property <int> tab: 0;
+    in-out property <[LocalRow]> rows;
+    in-out property <string> status: "正在读取本地索引…";
+    in-out property <bool> busy;
+    in-out property <string> query;
+    in-out property <int> sort-index;
+    in-out property <string> import-path;
+    in-out property <bool> recursive;
+    in-out property <bool> import-ready;
+    in-out property <string> import-summary: "选择已有图片目录，先扫描预览，再确认入库；不会移动、覆盖或删除源文件。";
+    in-out property <string> selected-title: "选择一张图片";
+    in-out property <string> selected-detail;
+    in-out property <bool> selected-available;
+    in-out property <bool> selected-imported;
+    in-out property <string> tags-input;
+    in-out property <string> export-path;
+    in-out property <string> confirmation;
+    in-out property <string> confirmation-button: "确认";
+    callback change-tab(int);
+    callback refresh();
+    callback filter();
+    callback select-row(string);
+    callback queue-action(string,string);
+    callback open-selected();
+    callback open-folder();
+    callback remove-selected(bool);
+    callback scan();
+    callback commit-import();
+    callback duplicates();
+    callback save-tags();
+    callback export-json();
+    callback confirm();
+    callback dismiss-confirmation();
+    VerticalLayout {
+        StudioTitleBar { caption: "下载与本地"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        HorizontalLayout {
+            height: 62px; padding-left: 18px; padding-right: 18px; spacing: 8px;
+            NavigationTab { text: "下载任务"; selected: root.tab == 0; clicked => { root.change-tab(0); } }
+            NavigationTab { text: "本地图库"; selected: root.tab == 1; clicked => { root.change-tab(1); } }
+            NavigationTab { text: "导入与整理"; width: 116px; selected: root.tab == 2; clicked => { root.change-tab(2); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: root.busy ? "处理中…" : "刷新"; enabled: !root.busy; clicked => { root.refresh(); } }
+        }
+        if root.tab != 2 : HorizontalLayout {
+            height: 52px; padding-left: 18px; padding-right: 18px; spacing: 10px;
+            LineEdit { text <=> root.query; placeholder-text: "搜索 ID / 文件名 / 标签 / 分辨率"; horizontal-stretch: 1; accepted => { root.filter(); } edited => { root.filter(); } }
+            ComboBox { model: ["最新保存", "最早保存", "文件大小"]; current-index <=> root.sort-index; selected(_) => { root.filter(); } width: 145px; }
+        }
+        if root.tab == 2 : Rectangle {
+            background: StudioTheme.panel; vertical-stretch: 1;
+            VerticalLayout {
+                padding: 24px; spacing: 14px;
+                Text { text: "已有图片，安全整理"; color: StudioTheme.text; font-size: 22px; font-weight: 600; }
+                Text { text: "识别 JPEG / PNG / WebP / GIF，按文件内容查重。标签清洗只更新本地记录，不改图片。"; color: StudioTheme.muted; wrap: word-wrap; }
+                LineEdit { text <=> root.import-path; placeholder-text: "输入已有图片目录的完整路径"; }
+                HorizontalLayout {
+                    CheckBox { text: "包含子目录（不跟随链接）"; checked <=> root.recursive; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: "扫描并预览"; primary: true; enabled: !root.busy && root.import-path != ""; clicked => { root.scan(); } }
+                    Button { text: "确认导入索引"; enabled: !root.busy && root.import-ready; clicked => { root.commit-import(); } }
+                }
+                ScrollView {
+                    vertical-stretch: 1; content-width: self.visible-width; content-height: summary.preferred-height + 20px;
+                    summary := Text { width: parent.visible-width - 12px; text: root.import-summary; color: StudioTheme.text; wrap: word-wrap; }
+                }
+                Button { text: "查看重复内容分组（不删除文件）"; enabled: !root.busy; clicked => { root.duplicates(); } }
+                Text { text: "导出本地整理记录"; color: StudioTheme.muted; }
+                HorizontalLayout {
+                    LineEdit { text <=> root.export-path; placeholder-text: "JSON 导出文件的完整路径（不覆盖已有文件）"; horizontal-stretch: 1; }
+                    Button { text: "导出 JSON"; enabled: !root.busy && root.export-path != ""; clicked => { root.export-json(); } }
+                }
+            }
+        }
+        if root.tab != 2 : HorizontalLayout {
+            spacing: 0px; vertical-stretch: 1;
+            ListView {
+                horizontal-stretch: 1;
+                for row in root.rows : Rectangle {
+                    height: 126px; background: row.selected ? StudioTheme.selected : StudioTheme.panel;
+                    border-width: 1px; border-color: row.selected ? StudioTheme.accent : StudioTheme.border;
+                    HorizontalLayout {
+                        padding: 12px; spacing: 14px;
+                        Rectangle { width: 130px; background: #101114;
+                            Image { visible: row.loaded; source: row.thumbnail; image-fit: contain; width: parent.width; height: parent.height; }
+                            if !row.loaded : Text { text: root.tab == 0 ? "原图任务" : "本地图片"; color: StudioTheme.muted; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        VerticalLayout {
+                            spacing: 5px; horizontal-stretch: 1;
+                            Text { text: row.title; color: StudioTheme.text; font-weight: 600; overflow: elide; }
+                            Text { text: row.subtitle; color: StudioTheme.muted; font-size: 12px; overflow: elide; }
+                            Text { text: row.detail; color: StudioTheme.accent; font-size: 11px; overflow: elide; }
+                            if root.tab == 0 && row.progress >= 0 : Rectangle { height: 3px; background: StudioTheme.border; Rectangle { width: parent.width * min(1,max(0,row.progress)); height: parent.height; background: StudioTheme.accent; } }
+                            Rectangle { vertical-stretch: 1; }
+                            HorizontalLayout {
+                                Button { text: "选择"; clicked => { root.select-row(row.key); } }
+                                if root.tab == 0 && (row.state == "queued" || row.state == "running") : Button { text: "暂停"; clicked => { root.queue-action(row.key,"paused"); } }
+                                if root.tab == 0 && (row.state == "paused" || row.state == "failed" || row.state == "cancelled" || row.state == "missing") : Button { text: row.state == "paused" ? "继续" : "重试"; clicked => { root.queue-action(row.key,"queued"); } }
+                                if root.tab == 0 && (row.state == "queued" || row.state == "running" || row.state == "paused") : Button { text: "取消"; clicked => { root.queue-action(row.key,"cancelled"); } }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                width: 270px; background: StudioTheme.elevated;
+                VerticalLayout {
+                    padding: 18px; spacing: 12px;
+                    Text { text: root.selected-title; color: StudioTheme.text; font-size: 17px; wrap: word-wrap; }
+                    ScrollView { vertical-stretch: 1; content-width: self.visible-width; content-height: details.preferred-height + 10px; details := Text { width: parent.visible-width; text: root.selected-detail; color: StudioTheme.muted; wrap: word-wrap; font-size: 12px; } }
+                    Button { text: "查看本地完整原图"; enabled: root.selected-available && !root.busy; clicked => { root.open-selected(); } }
+                    Button { text: "打开所在目录"; enabled: root.selected-available; clicked => { root.open-folder(); } }
+                    if root.selected-imported : LineEdit { text <=> root.tags-input; placeholder-text: "标签，逗号分隔"; }
+                    if root.selected-imported : Button { text: "预览并规范化标签"; enabled: !root.busy; clicked => { root.save-tags(); } }
+                    Button { text: "仅移除记录…"; enabled: root.selected-title != "选择一张图片" && !root.busy; clicked => { root.remove-selected(false); } }
+                    if !root.selected-imported : Button { text: "删除已下载文件…"; enabled: root.selected-available && !root.busy; clicked => { root.remove-selected(true); } }
+                }
+            }
+        }
+        Rectangle { height: 54px; background: StudioTheme.panel; Text { x: 18px; width: parent.width - 36px; height: parent.height; text: root.rows.length == 0 && root.tab != 2 && !root.busy ? root.status + " · 暂无记录，可从画廊加入下载或导入已有图片" : root.status; color: StudioTheme.muted; wrap: word-wrap; vertical-alignment: center; font-size: 12px; } }
+    }
+    if root.confirmation != "" : Rectangle {
+        TouchArea { width: parent.width; height: parent.height; }
+        width: parent.width; height: parent.height; background: #000000aa;
+        Rectangle {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            width: 520px; height: 230px; background: StudioTheme.elevated; border-radius: 10px; border-width: 1px; border-color: StudioTheme.border;
+            VerticalLayout { padding: 24px; spacing: 18px;
+                Text { text: "确认操作"; color: StudioTheme.text; font-size: 20px; font-weight: 600; }
+                Text { text: root.confirmation; color: StudioTheme.text; wrap: word-wrap; vertical-stretch: 1; }
+                HorizontalLayout { Rectangle { horizontal-stretch: 1; } Button { text: "取消"; clicked => { root.dismiss-confirmation(); } } Button { text: root.confirmation-button; primary: true; clicked => { root.confirm(); } } }
+            }
+        }
+    }
+}
+
+export component LocalOriginalWindow inherits Window {
+    icon: @image-url("../resources/wallhaven-studio.png");
+    title: "本地原图 - WallHaven Studio";
+    preferred-width: 1000px; preferred-height: 760px; min-width: 600px; min-height: 400px;
+    no-frame: true; resize-border-width: root.maximized ? 0px : 6px;
+    background: StudioTheme.canvas; default-font-family: "Segoe UI";
+    in-out property <image> original;
+    in-out property <string> message: "正在读取本地完整原图…";
+    in-out property <bool> loaded;
+    in-out property <float> zoom: 1;
+    in-out property <length> pan-x;
+    in-out property <length> pan-y;
+    VerticalLayout {
+        StudioTitleBar { caption: "本地完整原图"; maximized <=> root.maximized; minimize => { root.minimized = true; } close-window => { root.close(); } }
+        Rectangle { vertical-stretch: 1; clip: true;
+            Image { source: root.original; visible: root.loaded; image-fit: contain; width: parent.width * root.zoom; height: parent.height * root.zoom; x: (parent.width - self.width) / 2 + root.pan-x; y: (parent.height - self.height) / 2 + root.pan-y; }
+            TouchArea {
+                private property <length> old-x; private property <length> old-y;
+                pointer-event(event) => { if event.kind == PointerEventKind.down { self.old-x = root.pan-x; self.old-y = root.pan-y; } }
+                moved => { if self.pressed { root.pan-x = self.old-x + self.mouse-x - self.pressed-x; root.pan-y = self.old-y + self.mouse-y - self.pressed-y; } }
+                scroll-event(event) => { let old = root.zoom; let next = min(8,max(1,old + (event.delta-y > 0px ? 0.2 : -0.2))); let ax = self.mouse-x - self.width / 2; let ay = self.mouse-y - self.height / 2; root.pan-x = ax - (ax - root.pan-x) * next / old; root.pan-y = ay - (ay - root.pan-y) * next / old; root.zoom = next; accept }
+                double-clicked => { root.zoom = 1; root.pan-x = 0px; root.pan-y = 0px; }
+            }
+        }
+        Rectangle { height: 50px; background: StudioTheme.panel; Text { x: 18px; width: parent.width - 36px; height: parent.height; text: root.message; color: StudioTheme.muted; vertical-alignment: center; wrap: word-wrap; } }
+    }
+}

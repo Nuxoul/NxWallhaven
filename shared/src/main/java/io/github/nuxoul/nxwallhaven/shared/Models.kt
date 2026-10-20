@@ -50,11 +50,36 @@ data class Filters(
         if (sorting == "toplist") put("top_range", topRange)
         seed?.let { put("seed", it) }
     }.toString()
+    /** Versioned allowlist only: never persist authentication or response/file data. */
+    fun savedJson(): String = JSONObject().apply {
+        put("version",1); put("query",query); put("categories",categories); put("purity",purity)
+        put("sorting",sorting); put("order",order); put("atleast",atleast); put("ratios",ratios)
+        put("colors",colors); put("topRange",topRange)
+    }.toString()
+    fun valid(): Boolean = query.length<=4096 && categories.matches(Regex("[01]{3}")) && categories!="000" &&
+        purity.matches(Regex("[01]{3}")) && purity!="000" &&
+        sorting in setOf("date_added","relevance","random","views","favorites","toplist","hot") &&
+        order in setOf("asc","desc") && topRange in setOf("1d","3d","1w","1M","3M","6M","1y") &&
+        (atleast.isEmpty() || atleast.matches(Regex("[1-9][0-9]{0,5}x[1-9][0-9]{0,5}"))) &&
+        (ratios.isEmpty() || ratios.matches(Regex("[1-9][0-9]{0,3}x[1-9][0-9]{0,3}(,[1-9][0-9]{0,3}x[1-9][0-9]{0,3})*"))) &&
+        (colors.isEmpty() || colors.matches(Regex("#?[A-Fa-f0-9]{6}")))
     fun permitted(nsfw: Boolean, hasKey: Boolean): Filters {
-        val bits = purity.padEnd(3, '0').take(3).toCharArray()
+        val bits = (purity.takeIf { it.matches(Regex("[01]{3}")) } ?: "100").toCharArray()
         if (!nsfw || !hasKey) bits[2] = '0'
         val safe = String(bits).let { if (it == "000") "100" else it }
         return copy(purity = safe)
+    }
+    companion object {
+        fun restore(json:String?,nsfw:Boolean,hasKey:Boolean):Filters = runCatching {
+            require(json!=null && json.length<=8192)
+            val o=JSONObject(json)
+            val names=setOf("version","query","categories","purity","sorting","order","atleast","ratios","colors","topRange")
+            require(o.opt("version")==1 && o.keys().asSequence().all { it in names })
+            require((names-"version").all { o.opt(it) is String })
+            val f=Filters(o.getString("query"),o.getString("categories"),o.getString("purity"),o.getString("sorting"),
+                o.getString("order"),o.getString("atleast"),o.getString("ratios"),o.getString("colors"),o.getString("topRange"))
+            require(f.valid()); f.permitted(nsfw,hasKey)
+        }.getOrElse { Filters() }
     }
 }
 
@@ -114,4 +139,32 @@ class PageAccumulator {
         walls=walls+fresh;page=result.page;last=result.last;seed=seed?:result.seed;exhausted=page>=last;return true
     }
     fun fail(token:Long) {if(token==generation) loading=false}
+}
+
+data class TransferProgress(val received:Long=0,val total:Long?=null,val bytesPerSecond:Long?=null,val etaSeconds:Long?=null) {
+    val fraction:Float? get()=total?.takeIf { it>0 }?.let { (received.toDouble()/it).coerceIn(0.0,1.0).toFloat() }
+    companion object {
+        fun fromNative(received:ULong,total:ULong?):TransferProgress {
+            val r=received.coerceAtMost(Long.MAX_VALUE.toULong()).toLong()
+            val t=total?.takeIf { it<=Long.MAX_VALUE.toULong() && it>=received && it>0uL }?.toLong()
+            return TransferProgress(r,t)
+        }
+    }
+}
+
+/** Measures only bytes observed after the first callback; cache hits have no fabricated rate. */
+class TransferMeter {
+    private var start:Long?=null
+    private var baseline=0L
+    private var previous=0L
+    @Synchronized fun sample(received:ULong,total:ULong?,nowNanos:Long=System.nanoTime()):TransferProgress {
+        val p=TransferProgress.fromNative(received,total)
+        if(start==null || p.received<previous) {start=nowNanos;baseline=p.received}
+        previous=p.received
+        val elapsed=nowNanos-start!!
+        val rate=if(elapsed>=500_000_000L && p.received>baseline)
+            ((p.received-baseline).toDouble()*1_000_000_000.0/elapsed).coerceAtMost(Long.MAX_VALUE.toDouble()).toLong().takeIf { it>0 } else null
+        val eta=if(rate!=null && p.total!=null) kotlin.math.ceil((p.total-p.received).toDouble()/rate).toLong() else null
+        return p.copy(bytesPerSecond=rate,etaSeconds=eta)
+    }
 }

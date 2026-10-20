@@ -2,6 +2,7 @@ import { ScrollView, LineEdit, Button, ComboBox, CheckBox, Palette } from "std-w
 import { StudioTheme, StudioTitleBar, SectionHeading, SurfaceGroup, StatusNotice, NavigationTab, MetadataRow } from "design.slint";
 export { ProfileWindow, ProfileField, ProfileCard } from "profile.slint";
 export { DetailWindow, DetailTag, DetailSwatch } from "detail.slint";
+export { LocalWindow, LocalRow, LocalOriginalWindow } from "local.slint";
 
 component WallCard inherits Rectangle {
     in property <image> thumb;
@@ -146,6 +147,8 @@ export component AppWindow inherits Window {
     callback resized(length);
     callback go-browse();
     callback go-collections();
+    callback go-local();
+    callback batch-download();
     callback load-collections(bool);
     callback open-collection(int);
     callback refresh-collection();
@@ -178,10 +181,12 @@ export component AppWindow inherits Window {
                 padding-left: 18px; padding-right: 18px; padding-top: 14px; padding-bottom: 14px; spacing: 10px;
                 NavigationTab { text: "发现壁纸"; selected: !root.collection-mode && root.screen == 0; clicked => { if root.collection-mode || root.screen != 0 { root.go-browse(); } } }
                 NavigationTab { text: "我的收藏"; selected: root.collection-mode; clicked => { root.go-collections(); } }
+                NavigationTab { text: "下载与本地"; clicked => { root.go-local(); } }
                 Rectangle { width: 8px; }
                 if root.screen == 0 && !root.collection-mode : LineEdit { text <=> root.query-text; placeholder-text: "关键词 / +标签 / -标签 / @作者 / like:id"; horizontal-stretch: 1; height: 36px; accepted => { root.search(); } }
                 if root.screen != 0 || root.collection-mode : Text { text: root.screen == 1 ? "壁纸详情" : "收藏与灵感"; color: StudioTheme.muted; vertical-alignment: center; horizontal-stretch: 1; }
                 if root.screen == 0 && !root.collection-mode : Button { text: "搜索"; primary: true; width: 76px; height: 36px; clicked => { root.search(); } }
+                if root.screen == 0 : Button { text: "批量下载…"; enabled: root.cards.length > 0; clicked => { root.batch-download(); } }
                 Rectangle { width: 6px; height: 6px; vertical-stretch: 0; border-radius: 3px; background: root.web-authenticated ? #82c8a0 : #626b79; accessible-role: none; }
                 Button { text: "账号与设置"; width: 104px; height: 36px; clicked => { root.go-settings(); } }
                 if root.screen == 1 : Button { text: "返回列表"; width: 90px; height: 36px; clicked => { root.go-back(); } }
