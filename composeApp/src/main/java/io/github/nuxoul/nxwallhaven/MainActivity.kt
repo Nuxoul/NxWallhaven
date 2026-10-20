@@ -48,6 +48,10 @@ class MainActivity:ComponentActivity() {
             }
         }}
     }
+    override fun onStop() {
+        android.webkit.CookieManager.getInstance().flush()
+        super.onStop()
+    }
     override fun onSaveInstanceState(outState:Bundle) {
         export?.let {(wall,file)->outState.putString("export-id",wall.id);outState.putString("export-file",file.absolutePath);outState.putString("export-mime",wall.format)}
         super.onSaveInstanceState(outState)

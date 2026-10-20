@@ -7768,6 +7768,7 @@ dependencies = [
  "thiserror 2.0.21",
  "uniffi",
  "wh-core",
+ "wh-site",
 ]
 
 [[package]]
@@ -7800,6 +7801,18 @@ dependencies = [
  "windows",
  "windows-sys 0.61.2",
  "wry",
+]
+
+[[package]]
+name = "wh-site"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "scraper",
+ "serde",
+ "serde_json",
+ "url",
+ "wh-core",
 ]
 
 [[package]]

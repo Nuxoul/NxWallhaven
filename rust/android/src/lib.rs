@@ -2,6 +2,7 @@
 mod cache;
 mod image_format;
 mod profile;
+mod site_bridge;
 mod urls;
 
 use serde::{Deserialize, Serialize};

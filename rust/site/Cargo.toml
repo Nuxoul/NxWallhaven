@@ -1,0 +1,12 @@
+[package]
+name = "wh-site"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wh-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+scraper = "0.26"
+url = "2"
+http = "1"

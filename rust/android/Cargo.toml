@@ -13,6 +13,7 @@ bindgen = ["uniffi/cli"]
 
 [dependencies]
 wh-core = { path = "../core" }
+wh-site = { path = "../site" }
 uniffi = "0.32.2"
 reqwest.workspace = true
 serde.workspace = true

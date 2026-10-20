@@ -1,5 +1,7 @@
 # Android 0.1.0-alpha01：首版实现与验收
 
+> 后续版本已补齐账号收藏闭环，见 [第26篇：Android alpha02](26-Android账号登录与原生收藏.md)。下方“未实现账号收藏”、包哈希和测试计数是alpha01的历史状态；真实账号验收边界仍保留。
+
 ## 当前成果
 
 Android 已从空目录建立为可安装、已在模拟器运行的原生 APP，不是静态界面、网页套壳或只编译成功的骨架。延续方案 B：Kotlin + Compose Multiplatform 插件 / Android Material 3，Rust 共享业务通过 UniFFI 接入。Windows Rust + Slint 不重写，桌面源码本轮无修改，已有 EXE 哈希未变。

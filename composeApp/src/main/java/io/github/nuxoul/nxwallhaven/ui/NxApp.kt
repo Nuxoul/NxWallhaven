@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -52,6 +53,7 @@ fun NxApp(vm: NxViewModel) {
         val snackbar = remember { SnackbarHostState() }
         val browseGrid = rememberLazyStaggeredGridState()
         val profileGrid = rememberLazyStaggeredGridState()
+        val accountGrid = rememberLazyStaggeredGridState()
         var underlyingRoute by rememberSaveable { mutableStateOf("browse") }
         // A detail is an overlay, not a replacement: its source grid stays composed.
         SideEffect { if (state.route != "detail") underlyingRoute = state.route }
@@ -65,9 +67,11 @@ fun NxApp(vm: NxViewModel) {
                 when (baseRoute) {
                     "settings" -> SettingsScreen(vm)
                     "profile" -> ProfileScreen(vm, profileGrid, active = state.route == "profile")
+                    "collections" -> AccountScreen(vm, accountGrid, active = state.route == "collections")
                     else -> DiscoverScreen(vm, browseGrid, active = state.route == "browse")
                 }
                 if (state.route == "detail") DetailScreen(vm)
+                AccountOverlays(vm)
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
             }
         }
@@ -76,14 +80,20 @@ fun NxApp(vm: NxViewModel) {
 
 @Composable
 internal fun AppNavigation(settings: Boolean, vm: NxViewModel) {
+    val state by vm.ui.collectAsStateWithLifecycle()
     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         NavigationBarItem(
-            selected = !settings, onClick = { vm.browse() },
+            selected = state.route == "browse", onClick = { vm.browse() },
             icon = { Icon(Icons.Outlined.Explore, contentDescription = "浏览壁纸") },
             label = { Text("浏览") }, modifier = Modifier.testTag("nav-discover")
         )
         NavigationBarItem(
-            selected = settings, onClick = { vm.settings() },
+            selected = state.route == "collections", onClick = { vm.collections() },
+            icon = { Icon(Icons.Outlined.FavoriteBorder, contentDescription = "我的收藏") },
+            label = { Text("收藏") }, modifier = Modifier.testTag("nav-collections")
+        )
+        NavigationBarItem(
+            selected = state.route == "settings", onClick = { vm.settings() },
             icon = { Icon(Icons.Outlined.Settings, contentDescription = "设置") },
             label = { Text("设置") }, modifier = Modifier.testTag("nav-settings")
         )

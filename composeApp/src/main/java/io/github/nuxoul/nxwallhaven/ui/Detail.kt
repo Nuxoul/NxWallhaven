@@ -55,6 +55,8 @@ internal fun DetailScreen(vm: NxViewModel) {
                     },
                     navigationIcon = { NamedIcon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", { vm.back() }, Modifier.testTag("detail-back")) },
                     actions = {
+                        NamedIcon(Icons.Outlined.FavoriteBorder, "管理此图收藏", { wall?.let { vm.account.favorite(it.id) } },
+                            Modifier.testTag("favorite-wallpaper"), enabled = wall != null)
                         NamedIcon(Icons.Outlined.Info, "壁纸信息", { metadata = true },
                             Modifier.testTag("detail-info"), enabled = wall != null)
                     }

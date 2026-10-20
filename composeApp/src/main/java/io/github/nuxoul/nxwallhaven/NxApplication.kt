@@ -10,4 +10,5 @@ class NxApplication : Application() {
     }
     override fun onCreate() { super.onCreate(); initTls(this) }
     val repository by lazy { Repository(cacheDir) }
+    val webSession by lazy { io.github.nuxoul.nxwallhaven.account.WebSession(this) }
 }

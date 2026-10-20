@@ -52,6 +52,10 @@ class NxViewModel(application:Application,private val saved:SavedStateHandle):An
     private var profileToken=0L
     private val mutable=MutableStateFlow(NxState(filters=Filters(query=saved["query"]?:""),prefs=preferences.snapshot()))
     val ui=mutable.asStateFlow()
+    val account=io.github.nuxoul.nxwallhaven.account.AccountController(viewModelScope,app.webSession,permissions={
+        mutable.value.prefs.let { it.allowNsfw to it.hasKey }
+    })
+    fun collections(){navigate("collections");if(account.ui.value.collections.isEmpty())account.refreshCollections()}
     private val eventChannel=Channel<PlatformEvent>(Channel.BUFFERED)
     val events=eventChannel.receiveAsFlow()
     init { search(mutable.value.filters) }
@@ -153,6 +157,7 @@ class NxViewModel(application:Application,private val saved:SavedStateHandle):An
     private fun applyPermissions(prefs:Prefs,credentialsChanged:Boolean=false){
         val old=ui.value.prefs;mutable.update{it.copy(prefs=prefs)}
         if(credentialsChanged || old.allowNsfw!=prefs.allowNsfw || old.hasKey!=prefs.hasKey){
+            account.permissionsChanged()
             detailToken++;profileToken++;profilePages.reset();pages.reset();history.clear()
             val safe=ui.value.filters.permitted(prefs.allowNsfw,prefs.hasKey)
             mutable.update{it.copy(filters=safe,walls=emptyList(),profileWalls=emptyList(),profileLoading=false,detail=null,detailFile=null,route="settings",generation=pages.generation,profileGeneration=profilePages.generation)}

@@ -27,7 +27,7 @@ data class Wall(
 
 data class Page(val walls: List<Wall>, val page: Int, val last: Int, val seed: String?)
 data class ProfileInfo(val username: String, val group: String, val biography: String, val avatar: String?, val fields: List<Pair<String, String>>)
-data class CollectionInfo(val id: Int, val label: String, val count: Int)
+data class CollectionInfo(val id: Int, val label: String, val count: Int, val public: Boolean? = null)
 data class CacheInfo(val bytes: Long = 0, val files: Int = 0, val path: String = "")
 
 data class Filters(
@@ -89,7 +89,7 @@ object Wire {
     }
     fun collections(json: String): List<CollectionInfo> {
         val a = JSONObject(json).getJSONArray("data")
-        return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let { o -> val id=o.optInt("id"); if(id>0) CollectionInfo(id,o.text("label")?:"未命名",o.optInt("count")) else null } }
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let { o -> val id=o.optInt("id"); if(id>0) CollectionInfo(id,o.text("label")?:"未命名",o.optInt("count"),if(o.isNull("public"))null else o.optBoolean("public")) else null } }
     }
     fun cache(json: String): CacheInfo { val o=JSONObject(json); return CacheInfo(o.optLong("bytes"),o.optInt("files"),o.optString("path")) }
 }

@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.composeMultiplatform)
@@ -11,8 +13,8 @@ android {
         applicationId = "io.github.nuxoul.nxwallhaven"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-alpha01"
+        versionCode = 2
+        versionName = "0.1.0-alpha02"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -49,4 +51,26 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.12.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.12.1")
+}
+
+// Preserve the verifier's signed-CRL HTTP allowlist; debug adds localhost only.
+val verifierRules = configurations.create("verifierRules") { isTransitive = false }
+dependencies { add(verifierRules.name, "org.rustls:rustls-platform-verifier:0.2.0@aar") }
+val generateDebugNetworkRules = tasks.register("generateDebugNetworkRules") {
+    inputs.files(verifierRules)
+    val output = layout.projectDirectory.file("src/debug/res/xml/network_security_debug.xml")
+    outputs.file(output)
+    doLast {
+        ZipFile(verifierRules.singleFile).use { archive ->
+            val xml = archive.getInputStream(archive.getEntry("res/xml/network_security_config.xml")).bufferedReader().use { it.readText() }
+            check(xml.contains("cleartextTrafficPermitted=\"false\"") && xml.contains("crl.pki.goog"))
+            check(xml.split("</network-security-config>").size == 2)
+            val local = "<domain-config cleartextTrafficPermitted=\"true\"><domain includeSubdomains=\"false\">127.0.0.1</domain></domain-config>"
+            output.asFile.parentFile.mkdirs()
+            output.asFile.writeText(xml.replace("</network-security-config>", local + "</network-security-config>"))
+        }
+    }
+}
+tasks.configureEach {
+    if (name == "preDebugBuild" || name == "generateDebugResources" || name == "packageDebugResources") dependsOn(generateDebugNetworkRules)
 }

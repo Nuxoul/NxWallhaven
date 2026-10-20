@@ -7,10 +7,10 @@ wallhaven.cc 的 Windows + Android 第三方客户端，目标包含本地数据
 已确认采用方案 B：
 
 - **Windows：Rust + Slint**，实现位于 `rust/desktop`。
-- **共享核心：Rust**，API、模型、限流与布局位于 `rust/core`；Android UniFFI 接口与文件缓存位于 `rust/android`，统一数据库待实现。
-- **Android：Kotlin + Compose / Material 3**，首个 `0.1.0-alpha01` 原生测试版已构建并在模拟器验收，界面位于 `composeApp`，Kotlin 适配位于 `shared`。
+- **共享核心：Rust**，API、模型、限流与布局位于 `rust/core`；网站表单/收藏逻辑位于 `rust/site`，Android UniFFI与文件缓存位于 `rust/android`；统一数据库待实现。
+- **Android：Kotlin + Compose / Material 3**，当前 `0.1.0-alpha02`，原生浏览、完整原图、作者、文件缓存与网站账号收藏闭环已实现，界面位于 `composeApp`。
 
-桌面并非全部功能完成；Android 当前交付浏览、完整原图、作者页、文件缓存/保存与设置，网页登录/私有收藏写入、完整本地库仍待后续实现。详见最新验收范围。
+桌面和手机均不是全部需求已完成。Android账号/收藏的本地WebView、原生确认、跨进程恢复已验证，真实网站登录验证和账号写入仍需本人验收；后台下载队列、本地库等仍待后续。详见最新记录。
 
 ## 构建与运行
 
@@ -35,13 +35,13 @@ cd D:\Code\wallhaven
 .\scripts\build-android.ps1 -Tests
 ```
 
-需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；详见 [Android 首版构建与验收](docs/25-Android首版实现与验收.md)。
+需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；初始构建见 [第25篇](docs/25-Android首版实现与验收.md)，账号收藏与当前包见 [第26篇](docs/26-Android账号登录与原生收藏.md)。
 
-测试包：`dist\android\NxWallhaven-0.1.0-alpha01-debug.apk`，Android8+，包含ARM64/x86_64，使用调试签名，不是正式发布包。图片缓存与相册下载分开，原图已缓存时保存直接复制、不重新下载；独立进程断网复用及相册字节一致已在模拟器验证。[实际验收截图](docs/assets/android-alpha-acceptance.html)。
+测试包：`dist\android\NxWallhaven-0.1.0-alpha02-debug.apk`，Android8+，ARM64/x86_64，调试签名与alpha01一致，可升级测试，无需为了升级卸载清数据。图片缓存与相册下载分开，缓存保存不重新下载。新增底部“收藏”、同会话网页登录、私有收藏读取、详情快捷收藏与原生收藏夹管理；真实网站效果仍待本人登录验收，不将本地夹具结果冒充真实账号通过。
 
 ## 最新修复与验收
 
-最新成果见 [Android 首版实现与验收](docs/25-Android首版实现与验收.md)；桌面最新修复见 [窗口缩放固定分行与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)，此前见 [磁盘图片缓存与单文件发行](docs/22-磁盘图片缓存与单文件发行.md)。
+最新成果见 [Android alpha02：网页登录与原生收藏](docs/26-Android账号登录与原生收藏.md)，此前浏览版见 [Android首版实现与验收](docs/25-Android首版实现与验收.md)；桌面最新修复见 [窗口缩放固定分行与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)。
 
 - 兼容认证响应中的数字字符串，例如 `per_page: "24"`。
 - 设置改为独立窗口，不缩小主窗口。
@@ -83,6 +83,7 @@ cd D:\Code\wallhaven
 - [Android 首版实施方案（历史方案，首个浏览alpha已交付）](docs/23-Android首版实施方案-待确认.md)
 - [窗口缩放：固定分行、视口铺满与顶部闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)
 - [Android 首版：实现、APK构建、模拟器及独立进程断网验收](docs/25-Android首版实现与验收.md)
+- [Android alpha02：网页登录、私有收藏、写入确认与跨进程会话验收](docs/26-Android账号登录与原生收藏.md)
 
 较早的选型/完成报告可能包含已废弃结论，以当前代码和最新验收记录为准。
 
