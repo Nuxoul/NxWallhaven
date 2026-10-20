@@ -55,6 +55,8 @@ pub(crate) struct ImageCache {
     shared: Arc<Shared>,
     http: reqwest::blocking::Client,
     limit: u64,
+    #[cfg(test)]
+    before_hit_hash: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Control {
@@ -202,6 +204,8 @@ impl ImageCache {
             shared,
             http,
             limit: LIMIT,
+            #[cfg(test)]
+            before_hit_hash: Mutex::new(None),
         };
         {
             let _gate = cache.shared.gate.read().map_err(|_| MobileError::Cache)?;
@@ -289,6 +293,8 @@ impl ImageCache {
         fs::rename(part, self.path(hash, "json")).map_err(|_| MobileError::Cache)
     }
     fn hit(&self, hash: &str) -> Result<Option<String>> {
+        let disk = self.shared.disk.lock().map_err(|_| MobileError::Cache)?;
+        self.check_root()?;
         let Some(mut entry) = self.entry(hash)? else {
             return Ok(None);
         };
@@ -301,6 +307,17 @@ impl ImageCache {
             return Ok(None);
         }
         let mut file = File::open(&path).map_err(|_| MobileError::Cache)?;
+        // The caller holds the clear gate and owns this URL's flight. Eviction and
+        // discard_partial skip active flights, so hashing needs no root-wide disk
+        // mutex: slow original verification must not stall other hits or GETs.
+        drop(disk);
+        #[cfg(test)]
+        {
+            let probe = self.before_hit_hash.lock().unwrap().take();
+            if let Some(probe) = probe {
+                probe();
+            }
+        }
         let mut sha = Sha256::new();
         let mut length = 0u64;
         let mut buf = [0; 64 * 1024];
@@ -313,6 +330,12 @@ impl ImageCache {
             length += n as u64;
         }
         drop(file);
+        let _disk = self.shared.disk.lock().map_err(|_| MobileError::Cache)?;
+        self.check_root()?;
+        if !regular(&path)? {
+            self.delete(hash)?;
+            return Ok(None);
+        }
         if length != entry.length || hex(&sha.finalize()) != entry.sha256 {
             self.delete(hash)?;
             return Ok(None);
@@ -450,18 +473,17 @@ impl ImageCache {
         controlled: bool,
         poll: &mut dyn FnMut(u64, Option<u64>) -> Control,
     ) -> Result<String> {
+        if let Some(path) = self.hit(hash)? {
+            let entry = self.entry(hash)?.ok_or(MobileError::Cache)?;
+            return if poll(entry.length, Some(entry.length)) == Control::Continue {
+                Ok(path)
+            } else {
+                Ok(String::new())
+            };
+        }
         {
             let _disk = self.shared.disk.lock().map_err(|_| MobileError::Cache)?;
             self.check_root()?;
-            if let Some(path) = self.hit(hash)? {
-                let entry = self.entry(hash)?.ok_or(MobileError::Cache)?;
-                drop(_disk);
-                return if poll(entry.length, Some(entry.length)) == Control::Continue {
-                    Ok(path)
-                } else {
-                    Ok(String::new())
-                };
-            }
             if self.entry(hash)?.is_none() {
                 // Refuse collisions/unowned files; never overwrite unrelated content.
                 for suffix in ["json", "json.part", "part", "img"] {

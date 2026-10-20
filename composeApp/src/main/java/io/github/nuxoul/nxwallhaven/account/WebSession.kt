@@ -30,6 +30,7 @@ class WebSession(private val context:Context, private val origin:String="https:/
     private val generation=AtomicLong()
     private var view:WebView?=null
     private var loading=false
+    private var documentCommitted=false
     private var pageEpoch=0L
     private var securityError=false
     private var pendingCancel:(()->Unit)?=null
@@ -62,10 +63,15 @@ class WebSession(private val context:Context, private val origin:String="https:/
                 }
                 override fun onPageStarted(v:WebView,url:String?,favicon:Bitmap?) {
                     loading=true;pageEpoch++;pendingCancel?.invoke();pendingCancel=null
+                    documentCommitted=false
                     securityError=!sameOrigin(url)
+                }
+                override fun onPageCommitVisible(v:WebView,url:String?) {
+                    if(sameOrigin(url) && sameOrigin(v.url))documentCommitted=true
                 }
                 override fun onPageFinished(v:WebView,url:String?) {
                     loading=false;securityError=securityError || !sameOrigin(url)
+                    documentCommitted=sameOrigin(url)
                     CookieManager.getInstance().flush()
                 }
                 override fun onReceivedSslError(v:WebView,handler:SslErrorHandler,error:SslError) {
@@ -138,7 +144,9 @@ class WebSession(private val context:Context, private val origin:String="https:/
             start=Runnable {
                 if(epoch!=generation.get() || android.os.SystemClock.uptimeMillis()>deadline){fail();return@Runnable}
                 val v=webView();browser=v
-                if(loading){main.postDelayed(start,80);return@Runnable}
+                // Login HTML can be usable while a page image/subresource never finishes.
+                // CommitVisible proves this is the new main document, not the previous page.
+                if(loading && !documentCommitted){main.postDelayed(start,80);return@Runnable}
                 if(securityError || !sameOrigin(v.url)){fail();return@Runnable}
                 capturedPage=pageEpoch
                 pendingCancel=::fail
@@ -180,7 +188,7 @@ class WebSession(private val context:Context, private val origin:String="https:/
             val browser=view
             browser?.clearCache(true)
             browser?.let{(it.parent as? ViewGroup)?.removeView(it);it.stopLoading();it.destroy()}
-            view=null;loading=false;pageEpoch++
+            view=null;loading=false;documentCommitted=false;pageEpoch++
             CookieManager.getInstance().removeAllCookies {
                 CookieManager.getInstance().flush();WebStorage.getInstance().deleteAllData()
                 securityError=false
@@ -188,5 +196,5 @@ class WebSession(private val context:Context, private val origin:String="https:/
             }
         }
     }
-    fun destroy(){requireMain();cancelPending();view?.let{(it.parent as? ViewGroup)?.removeView(it);it.destroy()};view=null}
+    fun destroy(){requireMain();cancelPending();view?.let{(it.parent as? ViewGroup)?.removeView(it);it.destroy()};view=null;documentCommitted=false;loading=false}
 }

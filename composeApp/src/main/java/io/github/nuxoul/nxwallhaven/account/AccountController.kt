@@ -67,7 +67,7 @@ class AccountController(private val scope:CoroutineScope,val session:WebSession,
     }
     fun refreshCollections() {
         if(state.value.busy || state.value.manageBusy)return
-        val token=epoch;state.update{it.copy(busy=true,error=null)}
+        val token=epoch;state.update{it.copy(busy=true,error=null,status=if(it.username==null)"正在核对网站会话并读取收藏夹…"else"已登录 ${it.username} · 正在读取收藏夹…")}
         scope.launch{operation.withLock{if(token!=epoch)return@withLock;try{
             val owner=call{site.verify()}
             if(token!=epoch)return@withLock

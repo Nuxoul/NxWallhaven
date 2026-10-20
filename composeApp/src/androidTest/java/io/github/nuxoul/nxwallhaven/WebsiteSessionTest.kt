@@ -189,4 +189,33 @@ class WebsiteSessionTest {
             assertFalse(account.ui.value.favoriteOpen)
         } finally {release.countDown();onMain{scope.cancel();session.destroy()}}
     }
+    @Test fun loginDoneRecognizesSessionWithoutWaitingForPageImages()=runBlocking {
+        org.junit.Assume.assumeTrue(android.os.Build.MODEL.contains("sdk") || android.os.Build.FINGERPRINT.contains("generic"))
+        SiteFixture().use {fixture ->
+            fixture.stallAfterLogin.set(true)
+            val session=WebSession(app,fixture.origin,true)
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
+            val account=AccountController(scope,session,{false to false},transport(session,fixture.origin))
+            try {
+                session.clear()
+                onMain {
+                    val vm=ViewModelProvider(compose.activity)[NxViewModel::class.java]
+                    compose.activity.setContent {MaterialTheme {Box {
+                        AccountScreen(vm,rememberLazyStaggeredGridState(),true,account)
+                        AccountOverlays(vm,account)
+                    }}}
+                    account.openLogin()
+                }
+                waitPage(session,"/login")
+                onMain{session.webView().evaluateJavascript("document.getElementById('signin').click()",null)}
+                assertTrue("fixture did not stall the post-login image",fixture.slowResourceStarted.await(5,java.util.concurrent.TimeUnit.SECONDS))
+                compose.onNodeWithTag("login-done").performClick()
+                val end=System.currentTimeMillis()+3_000
+                while(account.ui.value.username==null && System.currentTimeMillis()<end)Thread.sleep(50)
+                assertEquals("login confirmation waited for an unrelated page image instead of recognizing the authenticated session",fixture.username,account.ui.value.username)
+                compose.waitUntil(5_000){!account.ui.value.busy}
+                assertEquals(2,account.ui.value.collections.size)
+            }finally{fixture.releaseSlowResource.countDown();onMain{scope.cancel();session.destroy()}}
+        }
+    }
 }

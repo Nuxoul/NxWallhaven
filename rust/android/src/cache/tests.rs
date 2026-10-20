@@ -610,3 +610,140 @@ fn modified_validator_resumes_and_crash_tail_is_truncated() {
     server.join().unwrap();
     assert_eq!(fs::read(path).unwrap(), body);
 }
+
+#[test]
+fn slow_original_verification_does_not_serialize_other_hits_or_misses() {
+    // A deterministic stand-in for slow phone storage/SHA: suspend one full-file
+    // verification, then require an unrelated hit and GET to finish before release.
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let (hot_url, hot_gets, hot_server) = server(body.clone(), body.len(), Duration::ZERO);
+    let slow = Arc::new(cache(&dir));
+    let hot_path = slow.acquire(&hot_url).unwrap();
+    hot_server.join().unwrap();
+    let (other_url, other_gets, other_server) = server(body.clone(), body.len(), Duration::ZERO);
+    let other_path = slow.acquire(&other_url).unwrap();
+    other_server.join().unwrap();
+    let fast = Arc::new(cache(&dir));
+    let (miss_url, miss_gets, miss_server) = server(body.clone(), body.len(), Duration::ZERO);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *slow.before_hit_hash.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }));
+    let owner = slow.clone();
+    let slow_thread = thread::spawn(move || owner.acquire(&hot_url).unwrap());
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (hit_tx, hit_rx) = std::sync::mpsc::channel();
+    let hit_cache = fast.clone();
+    let hit_thread = thread::spawn(move || {
+        let start = Instant::now();
+        let path = hit_cache.acquire(&other_url).unwrap();
+        hit_tx.send(start.elapsed()).unwrap();
+        path
+    });
+    let (miss_tx, miss_rx) = std::sync::mpsc::channel();
+    let miss_thread = thread::spawn(move || {
+        let start = Instant::now();
+        let path = fast.acquire(&miss_url).unwrap();
+        miss_tx.send(start.elapsed()).unwrap();
+        path
+    });
+    let hit_time = hit_rx.recv_timeout(Duration::from_millis(500));
+    let miss_time = miss_rx.recv_timeout(Duration::from_millis(500));
+    let hit_before_release = hit_time.is_ok();
+    let miss_before_release = miss_time.is_ok();
+    let gets_before_release = miss_gets.load(Ordering::SeqCst);
+    release_tx.send(()).unwrap();
+    assert_eq!(slow_thread.join().unwrap(), hot_path);
+    assert_eq!(hit_thread.join().unwrap(), other_path);
+    let miss_path = miss_thread.join().unwrap();
+    miss_server.join().unwrap();
+    let hit_elapsed = hit_time.unwrap_or_else(|_| hit_rx.recv().unwrap());
+    let miss_elapsed = miss_time.unwrap_or_else(|_| miss_rx.recv().unwrap());
+    eprintln!(
+        "cache isolation timing: unrelated_hit={hit_elapsed:?} unrelated_miss={miss_elapsed:?}"
+    );
+    assert_eq!(fs::read(miss_path).unwrap(), body);
+    assert_eq!(hot_gets.load(Ordering::SeqCst), 1);
+    assert_eq!(other_gets.load(Ordering::SeqCst), 1);
+    assert_eq!(miss_gets.load(Ordering::SeqCst), 1);
+    eprintln!("cache isolation: unrelated_hit_before_release={hit_before_release} unrelated_miss_before_release={miss_before_release} miss_GETs_before_release={gets_before_release}");
+    assert!(
+        hit_before_release && miss_before_release && gets_before_release == 1,
+        "full-file hit verification blocked unrelated cache hit/GET behind the disk mutex"
+    );
+}
+
+#[test]
+fn active_verification_still_blocks_clear_and_preserves_corruption_detection() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let (url, gets, server) = server(body.clone(), body.len(), Duration::ZERO);
+    let mut instance = cache(&dir);
+    instance.limit = 0; // Force eviction to consult the active-flight protection.
+    let c = Arc::new(instance);
+    let path = c.acquire(&url).unwrap();
+    server.join().unwrap();
+    // Same length, bad content: a metadata-only hit would incorrectly accept this.
+    let mut damaged = body;
+    damaged[45] ^= 1;
+    fs::write(&path, damaged).unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *c.before_hit_hash.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }));
+    let checking = c.clone();
+    let worker = thread::spawn(move || checking.acquire(&url));
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        c.shared.gate.try_write().is_err(),
+        "clear must remain exclusive"
+    );
+    // Metadata operations can proceed, but eviction must retain this active file.
+    {
+        let _disk = c.shared.disk.lock().unwrap();
+        c.evict(None).unwrap();
+        assert!(Path::new(&path).exists());
+    }
+    release_tx.send(()).unwrap();
+    assert!(worker.join().unwrap().is_err()); // Offline GET cannot replace corruption.
+    assert!(!Path::new(&path).exists());
+    assert_eq!(gets.load(Ordering::SeqCst), 1);
+    c.clear().unwrap();
+}
+
+#[test]
+fn distinct_images_reuse_one_client_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serving = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        for index in 0..2 {
+            let request = read_request(&mut socket);
+            assert!(request.starts_with(&format!("get /{index}.png ")));
+            assert!(!request.contains("cookie:"));
+            assert!(!request.contains("x-api-key:"));
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            socket.write_all(&body).unwrap();
+        }
+    });
+    let c = cache(&dir);
+    for index in 0..2 {
+        assert_eq!(
+            fs::read(c.acquire(&format!("http://{addr}/{index}.png")).unwrap()).unwrap(),
+            image_format::fixture()
+        );
+    }
+    serving.join().unwrap(); // Two GETs, exactly one accept; no per-image client rebuild.
+}

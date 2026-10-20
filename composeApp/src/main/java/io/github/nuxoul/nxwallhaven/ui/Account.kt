@@ -34,6 +34,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -141,6 +142,10 @@ internal fun AccountScreen(vm: NxViewModel, gridState: LazyStaggeredGridState, a
                                 Text(state.username?.let { "网站账号：$it" } ?: "尚未核对网站登录",
                                     style = MaterialTheme.typography.titleMedium)
                                 Text(state.status, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if(state.busy) {
+                                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    Text("核对有超时限制；若网站要求安全验证，请稍后重新打开网页完成。",style=MaterialTheme.typography.bodySmall)
+                                }
                                 Text("网页登录与 API Key 相互独立；收藏操作会修改 Wallhaven 网站数据。",
                                     style = MaterialTheme.typography.bodySmall)
                                 Button(onClick = { account.openLogin() }, enabled = !locked,

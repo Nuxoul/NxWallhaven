@@ -50,6 +50,8 @@ def main():
     parser.add_argument('--port', type=int, default=5580)
     parser.add_argument('--site-only', action='store_true', help='Run only local website-session tests')
     parser.add_argument('--downloads-only', action='store_true', help='Run only download/library tests and restart probes')
+    parser.add_argument('--class', dest='test_class', help='Run one exact instrumentation selector')
+    parser.add_argument('--expected', default='OK (1 test)', help='Expected instrumentation result for --class')
     args = parser.parse_args()
     if args.port % 2 or not 5554 <= args.port <= 5682:
         parser.error('port must be even and within 5554..5682')
@@ -104,6 +106,9 @@ def main():
             run(['shell', 'input', 'keyevent', '82'])
             print(run(['install', '-r', str(app)], timeout=180).stdout, flush=True)
             print(run(['install', '-r', '-t', str(tests)], timeout=180).stdout, flush=True)
+            if args.test_class:
+                instrument(args.test_class, 'focused-regression', args.expected)
+                return
             if not args.site_only and not args.downloads_only:
                 instrument('io.github.nuxoul.nxwallhaven.AndroidAcceptanceTest', 'acceptance', 'OK (4 tests)')
             if not args.site_only:
@@ -118,7 +123,7 @@ def main():
                 run(['shell', 'svc', 'data', 'enable'])
             if args.downloads_only:
                 return
-            instrument('io.github.nuxoul.nxwallhaven.WebsiteSessionTest', 'website-session', 'OK (4 tests)')
+            instrument('io.github.nuxoul.nxwallhaven.WebsiteSessionTest', 'website-session', 'OK (5 tests)')
             host = ThreadingHTTPServer(('127.0.0.1', 0), SessionFixture)
             thread = Thread(target=host.serve_forever, daemon=True)
             thread.start()
@@ -143,6 +148,10 @@ def main():
         finally:
             run(['shell', 'svc', 'wifi', 'enable'], check=False)
             run(['shell', 'svc', 'data', 'enable'], check=False)
+            timings = '\n'.join(line for line in run(['logcat', '-d', '-s', 'System.out:I'], check=False).stdout.splitlines() if 'NXWH_TIMING ' in line)
+            if timings:
+                (artifacts / 'image-timing.txt').write_text(timings, encoding='utf-8')
+                print(timings, flush=True)
             run(['pull', '/sdcard/Android/data/io.github.nuxoul.nxwallhaven/files', str(artifacts / 'screens')], check=False)
             (artifacts / 'crash.log').write_text(run(['logcat', '-d', '-b', 'crash'], check=False).stdout, encoding='utf-8')
             run(['emu', 'kill'], check=False)

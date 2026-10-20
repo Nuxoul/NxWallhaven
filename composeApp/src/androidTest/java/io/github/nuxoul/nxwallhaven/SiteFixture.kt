@@ -23,6 +23,9 @@ class SiteFixture:AutoCloseable {
     val rows=CopyOnWriteArrayList(listOf(Row(12,"Default",false),Row(13,"Public",true)))
     val favorite=AtomicBoolean(false)
     val dropNextWrite=AtomicBoolean(false)
+    val stallAfterLogin=AtomicBoolean(false)
+    val slowResourceStarted=java.util.concurrent.CountDownLatch(1)
+    val releaseSlowResource=java.util.concurrent.CountDownLatch(1)
     val username="FixtureUser"
     init{executor.execute{while(running.get()){try{val socket=server.accept();executor.execute{try{serve(socket)}catch(_:java.io.IOException){/* Client may cancel an oversized response; no fixture mutation is retried. */}}}catch(_:java.io.IOException){if(running.get())throw IllegalStateException("fixture server failed")}}}}
     private fun panel()="""<div id="userpanel"><a href="/user/$username">$username</a><form action="/logout"></form></div>"""
@@ -45,7 +48,8 @@ class SiteFixture:AutoCloseable {
         val logged=headers["cookie"].orEmpty().contains("nxfixture=logged")
         when {
             path=="/login" -> reply="""<html><title>Local fixture login</title><body><form method="post" action="/fixture-login"><button id="signin" type="submit">登录测试账号</button></form></body></html>"""
-            path=="/fixture-login" && method=="POST" -> {extra="Set-Cookie: nxfixture=logged; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict\r\n";reply=panel()}
+            path=="/fixture-login" && method=="POST" -> {extra="Set-Cookie: nxfixture=logged; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict\r\n";reply=panel()+if(stallAfterLogin.get())"""<img src="/slow-resource">"""else""}
+            path=="/slow-resource" -> {slowResourceStarted.countDown();releaseSlowResource.await(15,java.util.concurrent.TimeUnit.SECONDS);reply=""}
             path=="/too-large" -> reply="x".repeat(2*1024*1024+1)
             !logged -> reply="""<div id="userpanel"><a href="/login">Login</a></div>"""
             method=="POST" -> {
@@ -76,5 +80,5 @@ class SiteFixture:AutoCloseable {
         out.write("HTTP/1.1 $status\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n$extra\r\n".toByteArray())
         out.write(bytes);out.flush()
     }}
-    override fun close(){running.set(false);server.close();executor.shutdownNow()}
+    override fun close(){releaseSlowResource.countDown();running.set(false);server.close();executor.shutdownNow()}
 }
