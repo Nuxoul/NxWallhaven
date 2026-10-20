@@ -38,6 +38,8 @@ data class NxState(
 sealed interface PlatformEvent {
     data class Start(val intent:Intent):PlatformEvent
     data class Export(val wall:Wall,val file:File):PlatformEvent
+    data class ExportLocal(val item:DownloadItem):PlatformEvent
+    data object NotificationPermission:PlatformEvent
 }
 
 class NxViewModel(application:Application,private val saved:SavedStateHandle):AndroidViewModel(application) {
@@ -58,6 +60,19 @@ class NxViewModel(application:Application,private val saved:SavedStateHandle):An
     fun collections(){navigate("collections");if(account.ui.value.collections.isEmpty())account.refreshCollections()}
     private val eventChannel=Channel<PlatformEvent>(Channel.BUFFERED)
     val events=eventChannel.receiveAsFlow()
+    val local=io.github.nuxoul.nxwallhaven.local.LocalController(app,viewModelScope,app.downloads,
+        launch={eventChannel.trySend(PlatformEvent.Start(it))},export={eventChannel.trySend(PlatformEvent.ExportLocal(it))})
+    fun localPage(){navigate("local");local.refresh()}
+    fun downloadBatch(walls:List<Wall>){
+        viewModelScope.launch {
+            try {
+                val count=app.downloads.enqueue(walls)
+                local.refresh()
+                mutable.update{it.copy(message=if(count>0)"已加入 $count 个下载任务，可在“本地”查看进度"else"已有下载记录或原图地址不可用，请在本地页查看")}
+                if(count>0)eventChannel.send(PlatformEvent.NotificationPermission)
+            }catch(_:Exception){mutable.update{it.copy(message="未能加入下载队列，请重试")}}
+        }
+    }
     init { search(mutable.value.filters) }
     private fun key(purity:String):String? = if(purity.getOrNull(2)=='1') preferences.key() else null
     private fun failure(t:Throwable):String {
@@ -158,6 +173,7 @@ class NxViewModel(application:Application,private val saved:SavedStateHandle):An
         val old=ui.value.prefs;mutable.update{it.copy(prefs=prefs)}
         if(credentialsChanged || old.allowNsfw!=prefs.allowNsfw || old.hasKey!=prefs.hasKey){
             account.permissionsChanged()
+            local.permissionsChanged(credentialsChanged)
             detailToken++;profileToken++;profilePages.reset();pages.reset();history.clear()
             val safe=ui.value.filters.permitted(prefs.allowNsfw,prefs.hasKey)
             mutable.update{it.copy(filters=safe,walls=emptyList(),profileWalls=emptyList(),profileLoading=false,detail=null,detailFile=null,route="settings",generation=pages.generation,profileGeneration=profilePages.generation)}
@@ -178,18 +194,14 @@ class NxViewModel(application:Application,private val saved:SavedStateHandle):An
             mutable.update{it.copy(actionBusy=false,message=message)}
         }catch(t:Throwable){mutable.update{it.copy(actionBusy=false,message="操作失败，请确认原图已加载后重试")}}}
     }
-    fun saveOriginal()=originalAction {wall,file ->
-        if(Build.VERSION.SDK_INT<29){eventChannel.send(PlatformEvent.Export(wall,file));null}
-        else withContext(Dispatchers.IO){
-            val resolver=app.contentResolver
-            val values=ContentValues().apply{put(MediaStore.Images.Media.DISPLAY_NAME,wall.filename);put(MediaStore.Images.Media.MIME_TYPE,wall.format);put(MediaStore.Images.Media.RELATIVE_PATH,"Pictures/NxWallhaven");put(MediaStore.Images.Media.IS_PENDING,1)}
-            val uri=resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)?:error("无法创建相册文件")
-            try{resolver.openOutputStream(uri,"w")!!.use{out -> file.inputStream().use{it.copyTo(out)}};resolver.update(uri,ContentValues().apply{put(MediaStore.Images.Media.IS_PENDING,0)},null,null)}catch(t:Throwable){resolver.delete(uri,null,null);throw t}
-            "原图已保存到 Pictures/NxWallhaven"
-        }
+    fun saveOriginal(){
+        val wall=ui.value.detail?:return
+        if(!allowed(wall))return
+        downloadBatch(listOf(wall))
     }
     fun exportOriginal()=originalAction {wall,file ->eventChannel.send(PlatformEvent.Export(wall,file));null}
     fun completeExport(uri:Uri?,wall:Wall,file:File){if(uri==null)return;viewModelScope.launch{try{withContext(Dispatchers.IO){app.contentResolver.openOutputStream(uri,"w")!!.use{out->file.inputStream().use{it.copyTo(out)}}};mutable.update{it.copy(message="原图已保存")}}catch(t:Throwable){mutable.update{it.copy(message="保存失败，请重新选择位置")}}}}
+    fun completeLocalExport(uri:Uri?,item:DownloadItem){if(uri==null)return;viewModelScope.launch{try{withContext(Dispatchers.IO){check(app.downloads.allowed(item.wall));app.contentResolver.openOutputStream(uri,"w")!!.use{out->app.downloads.files.input(Uri.parse(item.uri!!)).use{it.copyTo(out)}}};mutable.update{it.copy(message="本地原图已导出")}}catch(_:Exception){mutable.update{it.copy(message="本地导出失败，原文件保留")}}}}
     fun shareOriginal()=originalAction {wall,file ->
         val uri=FileProvider.getUriForFile(app,"${app.packageName}.files",file)
         val intent=Intent(Intent.ACTION_SEND).setType(wall.format).putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

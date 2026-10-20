@@ -60,6 +60,7 @@ internal fun DiscoverScreen(vm: NxViewModel, gridState: LazyStaggeredGridState, 
                         }
                     },
                     actions = {
+                        BatchDownloadButton(vm,state.walls)
                         NamedIcon(Icons.Outlined.Tune, "搜索筛选", { filtersOpen = true }, Modifier.testTag("filters"))
                     }
                 )

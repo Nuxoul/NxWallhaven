@@ -1,5 +1,7 @@
 //! Blocking, platform-neutral UniFFI bridge. Call network methods off the UI thread.
 mod cache;
+mod downloads;
+pub use downloads::{DownloadObserver, MobileDownloads};
 mod image_format;
 mod profile;
 mod site_bridge;

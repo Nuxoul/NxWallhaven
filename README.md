@@ -7,10 +7,10 @@ wallhaven.cc 的 Windows + Android 第三方客户端，目标包含本地数据
 已确认采用方案 B：
 
 - **Windows：Rust + Slint**，实现位于 `rust/desktop`。
-- **共享核心：Rust**，API、模型、限流与布局位于 `rust/core`；网站表单/收藏逻辑位于 `rust/site`，Android UniFFI与文件缓存位于 `rust/android`；统一数据库待实现。
-- **Android：Kotlin + Compose / Material 3**，当前 `0.1.0-alpha02`，原生浏览、完整原图、作者、文件缓存与网站账号收藏闭环已实现，界面位于 `composeApp`。
+- **共享核心：Rust**，API、模型、限流与布局位于 `rust/core`；网站表单/收藏逻辑位于 `rust/site`，Android UniFFI与文件缓存位于 `rust/android`；下载/图库 SQLite 模式位于共享核心的可选 `library` 模块。
+- **Android：Kotlin + Compose / Material 3**，当前 `0.1.0-alpha03`，原生浏览、完整原图、作者、缓存、网站账号收藏、后台下载和离线图库已实现，界面位于 `composeApp`。
 
-桌面和手机均不是全部需求已完成。Android账号/收藏的本地WebView、原生确认、跨进程恢复已验证，真实网站登录验证和账号写入仍需本人验收；后台下载队列、本地库等仍待后续。详见最新记录。
+桌面和手机均不是全部需求已完成。Android 已验证本地网站会话、原生收藏确认、后台下载、离线图库与跨进程恢复；真实网站账号写入、物理设备/OEM后台策略、生产签名等仍需验收。详见最新记录。
 
 ## 构建与运行
 
@@ -35,13 +35,13 @@ cd D:\Code\wallhaven
 .\scripts\build-android.ps1 -Tests
 ```
 
-需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；初始构建见 [第25篇](docs/25-Android首版实现与验收.md)，账号收藏与当前包见 [第26篇](docs/26-Android账号登录与原生收藏.md)。
+需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；后台下载与当前包见 [第27篇](docs/27-Android后台下载与本地图库.md)，账号收藏见 [第26篇](docs/26-Android账号登录与原生收藏.md)。
 
-测试包：`dist\android\NxWallhaven-0.1.0-alpha02-debug.apk`，Android8+，ARM64/x86_64，调试签名与alpha01一致，可升级测试，无需为了升级卸载清数据。图片缓存与相册下载分开，缓存保存不重新下载。新增底部“收藏”、同会话网页登录、私有收藏读取、详情快捷收藏与原生收藏夹管理；真实网站效果仍待本人登录验收，不将本地夹具结果冒充真实账号通过。
+测试包：`dist\android\NxWallhaven-0.1.0-alpha03-debug.apk`，Android8+，ARM64/x86_64，调试签名与alpha01/02一致，可升级测试，无需为了升级卸载清数据。新增“本地”下载队列/图库、通知进度、暂停/继续/取消/重试、确认批量下载、离线原图/筛选/安全删除/分享导出；已缓存原图保存复用原始字节。后台运行受系统配额与省电策略约束。Android8–9使用应用专属外部图片目录，卸载前需先导出保留。
 
 ## 最新修复与验收
 
-最新成果见 [Android alpha02：网页登录与原生收藏](docs/26-Android账号登录与原生收藏.md)，此前浏览版见 [Android首版实现与验收](docs/25-Android首版实现与验收.md)；桌面最新修复见 [窗口缩放固定分行与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)。
+最新成果见 [Android alpha03：后台下载与本地图库](docs/27-Android后台下载与本地图库.md)，账号版见 [Android alpha02：网页登录与原生收藏](docs/26-Android账号登录与原生收藏.md)，此前浏览版见 [Android首版实现与验收](docs/25-Android首版实现与验收.md)；桌面最新修复见 [窗口缩放固定分行与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)。
 
 - 兼容认证响应中的数字字符串，例如 `per_page: "24"`。
 - 设置改为独立窗口，不缩小主窗口。
@@ -84,6 +84,7 @@ cd D:\Code\wallhaven
 - [窗口缩放：固定分行、视口铺满与顶部闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)
 - [Android 首版：实现、APK构建、模拟器及独立进程断网验收](docs/25-Android首版实现与验收.md)
 - [Android alpha02：网页登录、私有收藏、写入确认与跨进程会话验收](docs/26-Android账号登录与原生收藏.md)
+- [Android alpha03：持久队列、校验续传、离线图库及文件发布恢复](docs/27-Android后台下载与本地图库.md)
 
 较早的选型/完成报告可能包含已废弃结论，以当前代码和最新验收记录为准。
 

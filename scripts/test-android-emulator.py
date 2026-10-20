@@ -49,6 +49,7 @@ def main():
     parser.add_argument('--avd', default='NxWallhavenAcceptance')
     parser.add_argument('--port', type=int, default=5580)
     parser.add_argument('--site-only', action='store_true', help='Run only local website-session tests')
+    parser.add_argument('--downloads-only', action='store_true', help='Run only download/library tests and restart probes')
     args = parser.parse_args()
     if args.port % 2 or not 5554 <= args.port <= 5682:
         parser.error('port must be even and within 5554..5682')
@@ -103,8 +104,20 @@ def main():
             run(['shell', 'input', 'keyevent', '82'])
             print(run(['install', '-r', str(app)], timeout=180).stdout, flush=True)
             print(run(['install', '-r', '-t', str(tests)], timeout=180).stdout, flush=True)
-            if not args.site_only:
+            if not args.site_only and not args.downloads_only:
                 instrument('io.github.nuxoul.nxwallhaven.AndroidAcceptanceTest', 'acceptance', 'OK (4 tests)')
+            if not args.site_only:
+                instrument('io.github.nuxoul.nxwallhaven.DownloadLibraryTest', 'download-library', 'OK (4 tests)')
+                instrument('io.github.nuxoul.nxwallhaven.DownloadRestartProbe#prepare', 'download-restart-prepare', 'OK (1 test)')
+                run(['shell', 'am', 'force-stop', 'io.github.nuxoul.nxwallhaven'])
+                run(['shell', 'svc', 'wifi', 'disable'])
+                run(['shell', 'svc', 'data', 'disable'])
+                time.sleep(3)
+                instrument('io.github.nuxoul.nxwallhaven.DownloadRestartProbe#restoreOfflineAndReconcile', 'download-restart-restore', 'OK (1 test)')
+                run(['shell', 'svc', 'wifi', 'enable'])
+                run(['shell', 'svc', 'data', 'enable'])
+            if args.downloads_only:
+                return
             instrument('io.github.nuxoul.nxwallhaven.WebsiteSessionTest', 'website-session', 'OK (4 tests)')
             host = ThreadingHTTPServer(('127.0.0.1', 0), SessionFixture)
             thread = Thread(target=host.serve_forever, daemon=True)

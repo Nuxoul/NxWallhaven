@@ -104,7 +104,8 @@ internal fun AccountScreen(vm: NxViewModel, gridState: LazyStaggeredGridState, a
                             Icons.AutoMirrored.Outlined.ArrowBack, "返回收藏夹", { account.closeCollection() },
                             enabled = !locked
                         )
-                    }
+                    },
+                    actions = { if(selected!=null)BatchDownloadButton(vm,state.walls) }
                 )
                 if (selected != null) {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {

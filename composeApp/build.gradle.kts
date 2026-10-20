@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.nuxoul.nxwallhaven"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.0-alpha02"
+        versionCode = 3
+        versionName = "0.1.0-alpha03"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -46,6 +46,7 @@ dependencies {
     implementation("androidx.concurrent:concurrent-futures:1.2.0")
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("org.rustls:rustls-platform-verifier:0.2.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.12.1")

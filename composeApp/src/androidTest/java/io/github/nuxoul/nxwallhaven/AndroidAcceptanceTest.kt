@@ -129,6 +129,7 @@ class AndroidAcceptanceTest {
         val expected=digest(cached)
         val original=app.repository.image(url)
         val model=model()
+        app.getSharedPreferences("notification-permission",android.content.Context.MODE_PRIVATE).edit().putBoolean("asked",true).commit()
         try {
             shell("svc wifi disable");shell("svc data disable")
             val reopened=Repository(root).image(url)
@@ -136,11 +137,11 @@ class AndroidAcceptanceTest {
             compose.runOnUiThread{model.openDetail(Wall(id="w5mqr6",original=url,width=6240,height=4160,resolution="6240x4160"))}
             waitFor{model.ui.value.detailFile!=null}
             compose.runOnUiThread{model.saveOriginal()}
-            waitFor{!model.ui.value.actionBusy}
-            assertTrue("save did not complete offline",model.ui.value.message.orEmpty().contains("Pictures/NxWallhaven"))
+            waitFor{app.downloads.store.tasks().any{it.id=="w5mqr6" && it.state in setOf("completed","failed")}}
+            val item=app.downloads.store.tasks().first{it.id=="w5mqr6"}
+            assertEquals("save did not complete offline", "completed", item.state)
             val resolver=app.contentResolver
-            val cursor=resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,arrayOf(MediaStore.Images.Media._ID),"${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",arrayOf("wallhaven-w5mqr6%"),"${MediaStore.Images.Media.DATE_ADDED} DESC")!!
-            val uri=cursor.use{check(it.moveToFirst());android.content.ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,it.getLong(0))}
+            val uri=android.net.Uri.parse(item.uri!!)
             val saved=File(root,"saved-export.jpg")
             resolver.openInputStream(uri)!!.use{input->saved.outputStream().use{input.copyTo(it)}}
             assertArrayEquals(expected,digest(saved))
@@ -148,6 +149,7 @@ class AndroidAcceptanceTest {
             assertTrue(saved.isFile)
             assertTrue(original.isFile)
             resolver.delete(uri,null,null)
+            app.downloads.store.remove("w5mqr6",true)
             assertEquals(0,repository.cache().files)
         } finally {shell("svc wifi enable");shell("svc data enable")}
     }

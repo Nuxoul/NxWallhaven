@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -68,6 +69,7 @@ fun NxApp(vm: NxViewModel) {
                     "settings" -> SettingsScreen(vm)
                     "profile" -> ProfileScreen(vm, profileGrid, active = state.route == "profile")
                     "collections" -> AccountScreen(vm, accountGrid, active = state.route == "collections")
+                    "local" -> LocalScreen(vm)
                     else -> DiscoverScreen(vm, browseGrid, active = state.route == "browse")
                 }
                 if (state.route == "detail") DetailScreen(vm)
@@ -91,6 +93,11 @@ internal fun AppNavigation(settings: Boolean, vm: NxViewModel) {
             selected = state.route == "collections", onClick = { vm.collections() },
             icon = { Icon(Icons.Outlined.FavoriteBorder, contentDescription = "我的收藏") },
             label = { Text("收藏") }, modifier = Modifier.testTag("nav-collections")
+        )
+        NavigationBarItem(
+            selected = state.route == "local", onClick = { vm.localPage() },
+            icon = { Icon(Icons.Outlined.PhotoLibrary, contentDescription = "下载与本地图库") },
+            label = { Text("本地") }, modifier = Modifier.testTag("nav-local")
         )
         NavigationBarItem(
             selected = state.route == "settings", onClick = { vm.settings() },

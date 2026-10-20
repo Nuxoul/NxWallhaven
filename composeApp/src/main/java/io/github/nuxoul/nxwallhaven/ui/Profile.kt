@@ -42,7 +42,8 @@ internal fun ProfileScreen(vm: NxViewModel, gridState: LazyStaggeredGridState, a
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     },
-                    navigationIcon = { NamedIcon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", { vm.back() }) }
+                    navigationIcon = { NamedIcon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", { vm.back() }) },
+                    actions = { if(state.profileTab!=0)BatchDownloadButton(vm,state.profileWalls) }
                 )
                 TabRow(selectedTabIndex = state.profileTab.coerceIn(0, 2)) {
                     listOf("资料", "上传", "收藏集").forEachIndexed { index, label ->

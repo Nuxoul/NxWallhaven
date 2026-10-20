@@ -184,7 +184,7 @@ fn truncated_and_malformed_responses_leave_no_parts_or_commits() {
     }
 }
 #[test]
-fn interrupted_owned_parts_are_cleaned_on_restart() {
+fn interrupted_owned_parts_survive_restart_and_clear_is_owned() {
     let dir = tempfile::tempdir().unwrap();
     let c = cache(&dir);
     let hash = digest("interrupted");
@@ -197,6 +197,9 @@ fn interrupted_owned_parts_are_cleaned_on_restart() {
             sha256: String::new(),
             last_access: now(),
             complete: false,
+            validator: None,
+            validator_header: None,
+            total: None,
         })
         .unwrap(),
     )
@@ -204,6 +207,9 @@ fn interrupted_owned_parts_are_cleaned_on_restart() {
     create(&c.path(&hash, "part"), b"partial").unwrap();
     drop(c);
     let c = cache(&dir);
+    assert_eq!(fs::read(c.path(&hash, "part")).unwrap(), b"partial");
+    assert!(c.hit(&hash).unwrap().is_none());
+    c.clear().unwrap();
     assert_eq!(fs::read_dir(&c.root).unwrap().count(), 1);
 }
 #[test]
@@ -260,6 +266,9 @@ fn symlink_and_reparse_roots_and_files_are_refused() {
             sha256: digest("keep"),
             last_access: now(),
             complete: true,
+            validator: None,
+            validator_header: None,
+            total: None,
         })
         .unwrap(),
     )
@@ -275,4 +284,329 @@ fn symlink_and_reparse_roots_and_files_are_refused() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(dir.path().join("images"), &linked).unwrap();
     assert!(ImageCache::new(linked.to_str().unwrap()).is_err());
+}
+
+fn read_request(socket: &mut std::net::TcpStream) -> String {
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut request = Vec::new();
+    while !request.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        socket.read_exact(&mut byte).unwrap();
+        request.push(byte[0]);
+    }
+    String::from_utf8(request).unwrap().to_lowercase()
+}
+fn seed_partial(c: &ImageCache, url: &str, body: &[u8], length: usize) {
+    let hash = digest(url);
+    create(
+        &c.path(&hash, "json"),
+        &serde_json::to_vec(&Entry {
+            owner: OWNER.into(),
+            url_hash: hash.clone(),
+            length: length as u64,
+            sha256: hex(&Sha256::digest(&body[..length])),
+            last_access: now(),
+            complete: false,
+            validator: Some("\"original\"".into()),
+            validator_header: Some("etag".into()),
+            total: Some(body.len() as u64),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    create(&c.path(&hash, "part"), &body[..length]).unwrap();
+}
+#[test]
+fn resume_exact_range_checks_full_hash_and_offline_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/resume.png", listener.local_addr().unwrap());
+    let c = cache(&dir);
+    seed_partial(&c, &url, &body, 20);
+    let sent = body.clone();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let request = read_request(&mut s);
+        assert!(request.contains("range: bytes=20-\r\n"));
+        assert!(request.contains("if-range: \"original\"\r\n"));
+        write!(s, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 20-{}/{}\r\nETag: \"original\"\r\nConnection: close\r\n\r\n", sent.len()-20, sent.len()-1, sent.len()).unwrap();
+        s.write_all(&sent[20..]).unwrap();
+    });
+    let path = c
+        .acquire_controlled(&url, &mut |_, _| Control::Continue)
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(fs::read(&path).unwrap(), body);
+    let entry = c.entry(&digest(&url)).unwrap().unwrap();
+    assert_eq!(entry.sha256, hex(&Sha256::digest(&body)));
+    assert!(!c.path(&digest(&url), "part").exists());
+    drop(c);
+    assert_eq!(cache(&dir).acquire(&url).unwrap(), path);
+}
+#[test]
+fn ignored_range_200_restarts_not_appends() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let (url, count, server) = server(body.clone(), body.len(), Duration::ZERO);
+    let c = cache(&dir);
+    seed_partial(&c, &url, &body, 20);
+    let path = c
+        .acquire_controlled(&url, &mut |_, _| Control::Continue)
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(fs::read(path).unwrap(), body);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+#[test]
+fn mismatched_validator_or_range_never_commits() {
+    for variant in 0..4 {
+        let dir = tempfile::tempdir().unwrap();
+        let body = image_format::fixture();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/bad.png", listener.local_addr().unwrap());
+        let c = cache(&dir);
+        seed_partial(&c, &url, &body, 20);
+        let server = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            read_request(&mut s);
+            let range = match variant {
+                1 => format!("bytes 21-{}/{}", body.len() - 1, body.len()),
+                2 => "bytes nonsense".into(),
+                3 => format!("bytes 20-{}/{}", body.len() - 1, body.len() + 1),
+                _ => format!("bytes 20-{}/{}", body.len() - 1, body.len()),
+            };
+            let tag = if variant == 0 { "changed" } else { "original" };
+            write!(s, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: {range}\r\nETag: \"{tag}\"\r\nConnection: close\r\n\r\n",body.len()-20).unwrap();
+            let _ = s.write_all(&body[20..]);
+        });
+        assert!(c
+            .acquire_controlled(&url, &mut |_, _| Control::Continue)
+            .is_err());
+        server.join().unwrap();
+        assert!(!c.path(&digest(&url), "img").exists());
+        assert_eq!(c.usage().unwrap().files, 0);
+    }
+}
+#[test]
+fn real_pause_survives_new_instance_and_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/pause.png", listener.local_addr().unwrap());
+    let sent = body.clone();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        read_request(&mut s);
+        write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"original\"\r\nConnection: close\r\n\r\n",sent.len()).unwrap();
+        s.write_all(&sent[..20]).unwrap();
+        s.flush().unwrap();
+        thread::sleep(Duration::from_millis(150));
+        let _ = s.write_all(&sent[20..]);
+        drop(s);
+        let (mut s, _) = listener.accept().unwrap();
+        let request = read_request(&mut s);
+        assert!(request.contains("range: bytes=20-\r\n"));
+        assert!(request.contains("if-range: \"original\"\r\n"));
+        write!(s, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 20-{}/{}\r\nETag: \"original\"\r\nConnection: close\r\n\r\n",sent.len()-20,sent.len()-1,sent.len()).unwrap();
+        s.write_all(&sent[20..]).unwrap();
+    });
+    let c = cache(&dir);
+    assert!(c
+        .acquire_controlled(&url, &mut |received, _| if received >= 20 {
+            Control::Pause
+        } else {
+            Control::Continue
+        })
+        .unwrap()
+        .is_empty());
+    let entry = c.entry(&digest(&url)).unwrap().unwrap();
+    assert!(!entry.complete);
+    assert_eq!(entry.length, 20);
+    assert_eq!(fs::read(c.path(&digest(&url), "part")).unwrap(), body[..20]);
+    drop(c);
+    let c = cache(&dir);
+    assert!(c.hit(&digest(&url)).unwrap().is_none());
+    let path = c
+        .acquire_controlled(&url, &mut |_, _| Control::Continue)
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(fs::read(path).unwrap(), body);
+}
+#[test]
+fn cancel_removes_only_owned_partial_and_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let (url, _, server) = server(body.clone(), body.len(), Duration::ZERO);
+    let c = cache(&dir);
+    let unrelated = c.root.join("keep.txt");
+    fs::write(&unrelated, b"keep").unwrap();
+    assert!(c
+        .acquire_controlled(&url, &mut |_, _| Control::Cancel)
+        .unwrap()
+        .is_empty());
+    server.join().unwrap();
+    for suffix in ["part", "json", "json.part", "img"] {
+        assert!(!c.path(&digest(&url), suffix).exists());
+    }
+    assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+}
+#[test]
+fn preview_flight_and_pausing_save_share_get_without_cancelling_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/shared.png", listener.local_addr().unwrap());
+    let (connected, ready) = std::sync::mpsc::channel();
+    let sent = body.clone();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        read_request(&mut s);
+        connected.send(()).unwrap();
+        thread::sleep(Duration::from_millis(250));
+        write!(
+            s,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            sent.len()
+        )
+        .unwrap();
+        s.write_all(&sent).unwrap();
+    });
+    let c = Arc::new(cache(&dir));
+    let preview = c.clone();
+    let preview_url = url.clone();
+    let thread = thread::spawn(move || preview.acquire(&preview_url).unwrap());
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(c
+        .acquire_controlled(&url, &mut |_, _| Control::Pause)
+        .unwrap()
+        .is_empty());
+    let path = thread.join().unwrap();
+    server.join().unwrap();
+    assert_eq!(fs::read(&path).unwrap(), body);
+    // Listener is offline. A subsequent save reuses the preview's original.
+    assert_eq!(
+        c.acquire_controlled(&url, &mut |_, _| Control::Continue)
+            .unwrap(),
+        path
+    );
+}
+#[test]
+fn pausing_download_owner_keeps_joined_preview_alive() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let (url, count, server) = server(body.clone(), body.len(), Duration::from_millis(200));
+    let c = Arc::new(cache(&dir));
+    let owner = c.clone();
+    let owner_url = url.clone();
+    let started = Arc::new(AtomicBool::new(false));
+    let signal = started.clone();
+    let download = thread::spawn(move || {
+        owner
+            .acquire_controlled(&owner_url, &mut |_, _| {
+                signal.store(true, Ordering::Release);
+                // Wait deterministically for the preview to join this owner's flight.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let flight = owner
+                        .shared
+                        .flights
+                        .lock()
+                        .unwrap()
+                        .get(&digest(&owner_url))
+                        .and_then(Weak::upgrade)
+                        .unwrap();
+                    if flight.readers.lock().unwrap().len() >= 2 {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "preview failed to join flight");
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Control::Pause
+            })
+            .unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline, "owner did not begin");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let path = c.acquire(&url).unwrap();
+    assert!(download.join().unwrap().is_empty());
+    server.join().unwrap();
+    assert!(started.load(Ordering::Acquire));
+    assert_eq!(fs::read(path).unwrap(), body);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn missing_or_weak_validator_restarts_without_range() {
+    for validator in [None, Some("W/\"weak\"")] {
+        let dir = tempfile::tempdir().unwrap();
+        let body = image_format::fixture();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/restart.png", listener.local_addr().unwrap());
+        let c = cache(&dir);
+        seed_partial(&c, &url, &body, 20);
+        let mut entry = c.entry(&digest(&url)).unwrap().unwrap();
+        entry.validator = validator.map(String::from);
+        c.update(&digest(&url), &entry).unwrap();
+        let sent = body.clone();
+        let server = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let request = read_request(&mut s);
+            assert!(!request.contains("range:"));
+            write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                sent.len()
+            )
+            .unwrap();
+            s.write_all(&sent).unwrap();
+        });
+        let path = c
+            .acquire_controlled(&url, &mut |_, _| Control::Continue)
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(fs::read(path).unwrap(), body);
+    }
+}
+
+#[test]
+fn modified_validator_resumes_and_crash_tail_is_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = image_format::fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/modified.png", listener.local_addr().unwrap());
+    let c = cache(&dir);
+    seed_partial(&c, &url, &body, 20);
+    // Simulate a crash after bytes were written but before the next durable checkpoint.
+    OpenOptions::new()
+        .append(true)
+        .open(c.path(&digest(&url), "part"))
+        .unwrap()
+        .write_all(b"uncheckpointed tail")
+        .unwrap();
+    let modified = "Wed, 21 Oct 2015 07:28:00 GMT";
+    let mut entry = c.entry(&digest(&url)).unwrap().unwrap();
+    entry.validator = Some(modified.into());
+    entry.validator_header = Some("last-modified".into());
+    c.update(&digest(&url), &entry).unwrap();
+    drop(c);
+    let sent = body.clone();
+    let server = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let request = read_request(&mut s);
+        assert!(request.contains("range: bytes=20-\r\n"));
+        assert!(request.contains("if-range: wed, 21 oct 2015 07:28:00 gmt\r\n"));
+        write!(s,"HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 20-{}/{}\r\nLast-Modified: {modified}\r\nConnection: close\r\n\r\n",sent.len()-20,sent.len()-1,sent.len()).unwrap();
+        s.write_all(&sent[20..]).unwrap();
+    });
+    let path = cache(&dir)
+        .acquire_controlled(&url, &mut |_, _| Control::Continue)
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(fs::read(path).unwrap(), body);
 }

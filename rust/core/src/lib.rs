@@ -7,6 +7,8 @@
 
 pub mod api;
 pub mod layout;
+#[cfg(feature = "library")]
+pub mod library;
 pub mod models;
 pub mod ratelimit;
 
