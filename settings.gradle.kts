@@ -24,6 +24,9 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        maven("https://raw.githubusercontent.com/rustls/rustls-platform-verifier/maven-archive/android-release-support/maven/") {
+            content { includeGroup("rustls"); includeGroup("org.rustls") }
+        }
     }
 }
 

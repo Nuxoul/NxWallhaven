@@ -1,11 +1,11 @@
 [versions]
-# === 核心工具链（2026-10-19 实测稳定版）===
+# 已通过本项目 Android alpha 构建的工具链；不代表所有目标平台均已验收。
 agp = "9.4.1"
 kotlin = "2.4.21"
 composeMultiplatform = "1.12.2"
 
 # === Android SDK ===
-android-compileSdk = "36"
+android-compileSdk = "37"
 android-minSdk = "26"
 android-targetSdk = "36"
 

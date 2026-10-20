@@ -1,0 +1,35 @@
+[package]
+name = "wh-android"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "nxwallhaven_core"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+wh-core = { path = "../core" }
+uniffi = "0.32.2"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+scraper = "0.26"
+sha2 = "0.10"
+crc32fast = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
+rustls-platform-verifier = "0.7.1"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]

@@ -5,6 +5,8 @@
 /.kotlin/
 /dist/
 /out/
+/shared/src/main/jniLibs/
+/shared/src/main/java/com/nxwallhaven/core/
 
 # Local IDE / machine configuration
 /.idea/

@@ -7,10 +7,10 @@ wallhaven.cc 的 Windows + Android 第三方客户端，目标包含本地数据
 已确认采用方案 B：
 
 - **Windows：Rust + Slint**，实现位于 `rust/desktop`。
-- **共享核心：Rust**，当前 API、模型、限流与布局位于 `rust/core`；统一数据库及 UniFFI 待实现。
-- **Android：Kotlin + Compose Multiplatform / Material 3**，尚未开始实际集成。
+- **共享核心：Rust**，API、模型、限流与布局位于 `rust/core`；Android UniFFI 接口与文件缓存位于 `rust/android`，统一数据库待实现。
+- **Android：Kotlin + Compose / Material 3**，首个 `0.1.0-alpha01` 原生测试版已构建并在模拟器验收，界面位于 `composeApp`，Kotlin 适配位于 `shared`。
 
-当前优先修复与验收 Windows 浏览、详情、设置，不代表桌面全部功能已完成。原 Gradle 骨架不是可交付的 Android 实现。
+桌面并非全部功能完成；Android 当前交付浏览、完整原图、作者页、文件缓存/保存与设置，网页登录/私有收藏写入、完整本地库仍待后续实现。详见最新验收范围。
 
 ## 构建与运行
 
@@ -28,9 +28,20 @@ Windows 单文件包：`dist\WallHavenStudio-0.1.0-windows-x64\WallHavenStudio.e
 
 图片文件缓存位于 `%LOCALAPPDATA%\WallHavenStudio\Cache\Images`，与设置中的下载目录分开。完整原图加载后保存直接复用本地原始文件字节，不再次请求、不重新编码；重启后仍可复用。设置可查看实际磁盘用量/路径并清理，下载、配置和登录资料不受影响。
 
+### Android 测试版
+
+```powershell
+cd D:\Code\wallhaven
+.\scripts\build-android.ps1 -Tests
+```
+
+需要 JDK21、Android SDK37、NDK27.0.12077973、cargo-ndk4.1.2，以及 Rust ARM64/x86_64 Android目标。脚本生成 UniFFI 绑定和原生库后构建 APK；详见 [Android 首版构建与验收](docs/25-Android首版实现与验收.md)。
+
+测试包：`dist\android\NxWallhaven-0.1.0-alpha01-debug.apk`，Android8+，包含ARM64/x86_64，使用调试签名，不是正式发布包。图片缓存与相册下载分开，原图已缓存时保存直接复制、不重新下载；独立进程断网复用及相册字节一致已在模拟器验证。[实际验收截图](docs/assets/android-alpha-acceptance.html)。
+
 ## 最新修复与验收
 
-最新改进见 [窗口缩放：固定分行、铺满视口与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)；此前修复见 [磁盘图片缓存与单文件发行](docs/22-磁盘图片缓存与单文件发行.md)、[多窗口 UX 与原图阶段加载](docs/21-多窗口UX与原图阶段加载.md)。
+最新成果见 [Android 首版实现与验收](docs/25-Android首版实现与验收.md)；桌面最新修复见 [窗口缩放固定分行与闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)，此前见 [磁盘图片缓存与单文件发行](docs/22-磁盘图片缓存与单文件发行.md)。
 
 - 兼容认证响应中的数字字符串，例如 `per_page: "24"`。
 - 设置改为独立窗口，不缩小主窗口。
@@ -69,8 +80,9 @@ Windows 单文件包：`dist\WallHavenStudio-0.1.0-windows-x64\WallHavenStudio.e
 - [原图提速、作者分级筛选与标题栏对齐：回归及桌面验收](docs/20-加载提速与作者筛选标题对齐.md)
 - [多窗口 UX：居中、详情复用/并存与原图阶段加载](docs/21-多窗口UX与原图阶段加载.md)
 - [磁盘图片缓存：断网/重启保存复用、清理与单文件发行](docs/22-磁盘图片缓存与单文件发行.md)
-- [Android 首版实施方案（已同意，先修桌面，尚未开始实现）](docs/23-Android首版实施方案-待确认.md)
+- [Android 首版实施方案（历史方案，首个浏览alpha已交付）](docs/23-Android首版实施方案-待确认.md)
 - [窗口缩放：固定分行、视口铺满与顶部闪烁修复](docs/24-窗口缩放固定分行与闪烁修复.md)
+- [Android 首版：实现、APK构建、模拟器及独立进程断网验收](docs/25-Android首版实现与验收.md)
 
 较早的选型/完成报告可能包含已废弃结论，以当前代码和最新验收记录为准。
 
